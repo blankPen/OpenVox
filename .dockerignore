@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+.claude/
+
+# build artifacts / docs / dev artifacts not needed at runtime
+CLAUDE.md
+README.md
+verify_volcengine.py
+tts_sample.mp3
+
+# shrink the vendor tree
+vendor/*/.git/
+vendor/*/node_modules/
+vendor/*/.venv/
