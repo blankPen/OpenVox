@@ -80,6 +80,24 @@ _proc_client._ProcClient.initialize_logger = _patched_init_logger  # type: ignor
 
 logger = logging.getLogger("volcengine-agent")
 
+# ---------------------------------------------------------------------------
+# Agent extensibility 资源根
+# ---------------------------------------------------------------------------
+# workspace/ 是 agent 的"家目录"：persona/skills/extensions/users/sandbox 都放这里。
+# 把 workspace/ 加到 sys.path 顶，让 agent_persona / agent_skills / agent_extensions
+# / agent_memory 这些模块可以直接 import。
+import sys as _sys
+from pathlib import Path as _Path
+
+WORKSPACE_ROOT = _Path(__file__).parent / "workspace"
+if str(WORKSPACE_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(WORKSPACE_ROOT))
+
+# load_skill() 工具需要拿到当前 session 才能调 update_chat_ctx。
+# 用模块级 holder 共享：build_agent() 写入 closure 读，on_enter() 写入 holder。
+# （v0.1 简化实现；v0.2 改成把 session_provider 注入到 agent 实例属性）
+_session_holder: list[AgentSession | None] = [None]
+
 # 默认使用 realtime 模式，可通过 PIPELINE=pipeline 切换到分离 STT/LLM/TTS 模式。
 PIPELINE = os.environ.get("PIPELINE", "realtime")  # "realtime" 或 "pipeline"
 
@@ -107,16 +125,39 @@ class VolcengineAgent(Agent):
     该代理使用中文指令初始化，尽量以简洁自然的方式回答用户问题。
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        instructions: str | None = None,
+        tools: list | None = None,
+        mcp_servers: list | None = None,
+    ) -> None:
         super().__init__(
-            instructions=(
+            instructions=instructions or (
                 "你是一个友好的中文语音助手，名字叫小语。"
                 "请用简洁、自然的口吻回答用户的问题，"
                 "避免使用表情符号、Markdown 或特殊符号。"
-            )
+            ),
+            tools=tools or [],
+            mcp_servers=mcp_servers or [],
         )
 
     async def on_enter(self) -> None:
+        # 把 self.session 暴露给 build_agent() 的 session_provider
+        _session_holder[0] = self.session
+
+        # 注入 per-user 长期记忆（user_id 由 entrypoint 写入环境变量）
+        user_id = os.environ.get("_OPENCZ_USER_ID", "")
+        if user_id:
+            from agent_memory import MemoryStore
+            memory = MemoryStore(WORKSPACE_ROOT / "users" / user_id)
+            recall = memory.load_user_prompt()
+            if recall:
+                self.update_chat_ctx(messages=[
+                    {"role": "system", "content": recall}
+                ])
+                logger.info(f"[Memory] 注入 user={user_id} 长期记忆 ({len(recall)} chars)")
+
         # 不在此调用 self.session.generate_reply(...)：vendor 插件的
         # RealtimeSession.generate_reply 是占位实现（vendor/.../realtime.py:824），
         # 5 秒后必抛 RealtimeError，会让框架关闭 session，导致客户端被踢。
@@ -205,6 +246,45 @@ def _build_session() -> AgentSession:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Agent 工厂 — 从 workspace/ 装配 VolcengineAgent
+# ---------------------------------------------------------------------------
+
+
+def build_agent(workspace_root: _Path) -> Agent:
+    """Assemble a VolcengineAgent from the 4 workspace modules.
+
+    Called per-dispatch in entrypoint() with the real workspace root.
+    Order: persona → skills registry → mcp servers → tools → load_skill.
+    """
+    from agent_persona import load_persona
+    from agent_skills import scan_skills, make_load_skill_tool
+    from agent_extensions import load_tools, load_mcp_servers
+
+    persona = load_persona(workspace_root)
+    skills_registry = scan_skills(workspace_root / "skills")
+    mcp_servers = load_mcp_servers(workspace_root / "extensions" / "mcp")
+    tools = load_tools(workspace_root / "extensions" / "tools")
+
+    # load_skill 需要 session → 用模块级 _session_holder 跟 on_enter 共享
+    def session_provider() -> AgentSession:
+        assert _session_holder[0] is not None, "load_skill called before session started"
+        return _session_holder[0]
+
+    load_skill = make_load_skill_tool(skills_registry, session_provider)
+    tools.append(load_skill)
+
+    logger.info(
+        f"[Agent] build_agent: tools={len(tools)}, skills={len(skills_registry)}, "
+        f"mcp_servers={len(mcp_servers)}"
+    )
+    return VolcengineAgent(
+        instructions=persona.combined,
+        tools=tools,
+        mcp_servers=mcp_servers,
+    )
+
+
 async def entrypoint(ctx: JobContext) -> None:
     """LiveKit worker 启动后由调度器调用的主入口函数。"""
     logger.info(f"[Worker] 收到任务，正在加入房间: {ctx.room.name} (pipeline={PIPELINE})")
@@ -212,8 +292,17 @@ async def entrypoint(ctx: JobContext) -> None:
     session = _build_session()
     # 注意：room_input_options 必须传给 session.start()，不是 AgentSession.__init__()
     # livekit-agents 1.2.9 的 __init__ 不接受此参数；1.5+ 才移到 __init__
+
+    # 等远端参与者加入，取其 identity 作为 user_id（用于 per-user 记忆）
+    import asyncio
+    while not ctx.room.remote_participants:
+        await asyncio.sleep(0.1)
+    user_id = next(iter(ctx.room.remote_participants.values())).identity
+    os.environ["_OPENCZ_USER_ID"] = user_id
+    logger.info(f"[Worker] user_id={user_id}")
+
     await session.start(
-        agent=VolcengineAgent(),
+        agent=build_agent(WORKSPACE_ROOT),
         room=ctx.room,
         room_input_options=RoomInputOptions(
             text_input_cb=_custom_text_input_cb,
