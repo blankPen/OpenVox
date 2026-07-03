@@ -11,10 +11,10 @@
 """
 
 from __future__ import annotations
-``
 import asyncio
 import logging
 import os
+import sys
 
 from dotenv import load_dotenv
 
@@ -25,10 +25,58 @@ from livekit.agents import (
     WorkerOptions,
     cli,
 )
+from livekit.agents.voice.room_io import RoomInputOptions, TextInputEvent
 from livekit.plugins import volcengine
 
 # 从 .env 文件中加载环境变量，覆盖当前进程环境。仅在开发和本地运行时使用。
 load_dotenv()
+
+# 配置日志输出到 stdout，便于在控制台观察完整对话过程。
+# 日志格式：时间 | 级别 | logger 名 | 消息
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s.%(msecs)03d | %(levelname)-5s | %(name)s | %(message)s",
+    datefmt="%H:%M:%S",
+    stream=sys.stdout,
+    force=True,  # 覆盖之前可能设置的 handler
+)
+# 静音过于冗长的第三方 logger（按需调整）
+logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
+logging.getLogger("livekit_api").setLevel(logging.WARNING)
+
+# 阻止 LiveKit 的 cli.log.setup_logging 在 start/dev 命令中再次添加 JSON handler，
+# 否则每条日志会打印两次（一次我们的格式，一次 JSON）。
+# 我们已经手动设置了 logging.basicConfig，所以让 setup_logging 什么都不做。
+# 注意：_run.py 用的是 `from .log import setup_logging`（局部导入），所以必须
+# 同时 monkey-patch 模块层和 _run 模块层才能生效。
+from livekit.agents.cli import log as _cli_log  # noqa: E402
+from livekit.agents.cli import _run as _cli_run  # noqa: E402
+
+_cli_log.setup_logging = lambda *args, **kwargs: None  # type: ignore[assignment]
+_cli_run.setup_logging = lambda *args, **kwargs: None  # type: ignore[assignment]
+
+# 阻止子进程的 root logger 同时走 IPC 和 stdout（造成每条日志重复输出）。
+# LiveKit fork 出子进程后，proc_client.initialize_logger() 会把 root logger
+# 设为 NOTSET 并 addHandler(LogQueueHandler) — 但**不**移除我们从主进程继承的
+# StreamHandler。子进程就会通过 stdout 输出一次，再通过 IPC 发回主进程输出一次。
+# 修复：monkey-patch 让 initialize_logger 先移除 root logger 的所有 StreamHandler
+# 再加 IPC handler；这样日志只在主进程输出一次。
+import logging as _logging  # noqa: E402
+from livekit.agents.ipc import proc_client as _proc_client  # noqa: E402
+
+_orig_init_logger = _proc_client._ProcClient.initialize_logger
+
+
+def _patched_init_logger(self) -> None:  # type: ignore[no-untyped-def]
+    # 移除从主进程继承的所有 StreamHandler（保留其他 handler 类型）
+    root_logger = _logging.getLogger()
+    for h in list(root_logger.handlers):
+        if isinstance(h, _logging.StreamHandler):
+            root_logger.removeHandler(h)
+    _orig_init_logger(self)
+
+
+_proc_client._ProcClient.initialize_logger = _patched_init_logger  # type: ignore[assignment]
 
 logger = logging.getLogger("volcengine-agent")
 
@@ -69,10 +117,29 @@ class VolcengineAgent(Agent):
         )
 
     async def on_enter(self) -> None:
-        # 当机器人进入房间时，生成一句简短自我介绍。
-        self.session.generate_reply(
-            instructions="用一句话向用户问好并介绍自己。"
-        )
+        # 不在此调用 self.session.generate_reply(...)：vendor 插件的
+        # RealtimeSession.generate_reply 是占位实现（vendor/.../realtime.py:824），
+        # 5 秒后必抛 RealtimeError，会让框架关闭 session，导致客户端被踢。
+        # 进房主动打招呼改由 RealtimeModel 的 opening= 参数在 vendor 的
+        # _run_ws 启动路径里主动发 hello_request（vendor/.../realtime.py:457）。
+        logger.info("[Agent] 小语进入房间，等待与用户交互")
+
+
+# ---------------------------------------------------------------------------
+# 自定义回调：覆盖 LiveKit 框架默认的文本输入回调，加中文日志
+# ---------------------------------------------------------------------------
+
+
+def _custom_text_input_cb(sess: AgentSession, ev: TextInputEvent) -> None:
+    """客户端通过 DataChannel (TOPIC_CHAT) 发送文本消息时被调用。
+
+    LiveKit 默认实现是 sess.interrupt() + sess.generate_reply(user_input=ev.text)，
+    这里保留同样的语义，仅加上中文日志便于在控制台观察对话过程。
+    """
+    logger.info(f"[文本] 收到客户端消息: {ev.text!r}")
+    sess.interrupt()
+    sess.generate_reply(user_input=ev.text)
+    logger.info("[文本] 已将消息发送给 agent 触发回复")
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +178,11 @@ def _build_session() -> AgentSession:
     # 方案 A：使用 Volcengine Realtime 端到端语音模型。
     # RealtimeModel 需要 bot_name 来标识语音代理的角色。
     #
+    # opening= 让 vendor 插件在 ws 连接就绪后自动发一句 hello_request，
+    # 实现"进入房间主动打招呼"的效果；这条路径是 vendor 内部完整实现的
+    # （vendor/.../realtime.py:457-487），而 vendor 的 generate_reply 是
+    # 未完成的占位实现（vendor/.../realtime.py:824），必须避开。
+    #
     # 可选的联网搜索功能依赖独立的 Volcengine AI 联网搜索产品，
     # 需要在控制台中激活并把 API Key 填入 VOLCENGINE_WEBSEARCH_API_KEY。
     # 如果不启用或未提供该 Key，agent 会回退到离线训练知识。
@@ -120,6 +192,7 @@ def _build_session() -> AgentSession:
             access_token=os.environ["VOLCENGINE_REALTIME_ACCESS_TOKEN"],
             bot_name="小语",
             model="O",
+            opening="你好啊，今天过得怎么样？",
             enable_volc_websearch=_bool_env("VOLCENGINE_ENABLE_WEBSEARCH", False),
             volc_websearch_api_key=os.environ.get("VOLCENGINE_WEBSEARCH_API_KEY") or None,
             volc_websearch_no_result_message="我再想想怎么回答你。",
@@ -134,13 +207,22 @@ def _build_session() -> AgentSession:
 
 async def entrypoint(ctx: JobContext) -> None:
     """LiveKit worker 启动后由调度器调用的主入口函数。"""
-    logger.info(f"Joining room {ctx.room.name} (pipeline={PIPELINE})")
+    logger.info(f"[Worker] 收到任务，正在加入房间: {ctx.room.name} (pipeline={PIPELINE})")
 
     session = _build_session()
-    await session.start(agent=VolcengineAgent(), room=ctx.room)
+    # 注意：room_input_options 必须传给 session.start()，不是 AgentSession.__init__()
+    # livekit-agents 1.2.9 的 __init__ 不接受此参数；1.5+ 才移到 __init__
+    await session.start(
+        agent=VolcengineAgent(),
+        room=ctx.room,
+        room_input_options=RoomInputOptions(
+            text_input_cb=_custom_text_input_cb,
+        ),
+    )
 
     # 直到房间断开连接之前，保持会话运行。
     await ctx.connect()
+    logger.info(f"[Worker] 已连接到房间: {ctx.room.name}")
 
 
 if __name__ == "__main__":
