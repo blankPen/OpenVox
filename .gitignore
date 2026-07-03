@@ -3,3 +3,13 @@ __pycache__/
 *.pyc
 .env.local
 tts_sample.mp3
+
+# Agent extensibility runtime data
+workspace/users/*
+!workspace/users/.gitkeep
+workspace/sandbox/*
+!workspace/sandbox/.gitkeep
+workspace/extensions/mcp/*.json
+!workspace/extensions/mcp/.gitkeep
+workspace/skills/*/scripts/*
+!workspace/skills/*/scripts/.gitkeep
