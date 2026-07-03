@@ -11,7 +11,5 @@ README.md
 verify_volcengine.py
 tts_sample.mp3
 
-# shrink the vendor tree
-vendor/*/.git/
-vendor/*/node_modules/
-vendor/*/.venv/
+# No vendor/ tree anymore — the Volcengine plugin is vendored under
+# plugins/livekit-plugins-volcengine/ which IS needed at runtime.
