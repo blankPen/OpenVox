@@ -10,6 +10,11 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent
 WORKSPACE_ROOT = PROJECT_ROOT / "workspace"
 
+# Inject workspace/ into sys.path at module load (before any test imports)
+# so `from agent_persona import ...` works at collection time.
+if str(WORKSPACE_ROOT) not in sys.path:
+    sys.path.insert(0, str(WORKSPACE_ROOT))
+
 
 @pytest.fixture
 def workspace_root(tmp_path: Path) -> Path:
@@ -22,11 +27,3 @@ def workspace_root(tmp_path: Path) -> Path:
     else:
         tmp_path.mkdir()
     return tmp_path
-
-
-@pytest.fixture(autouse=True)
-def _inject_workspace_path():
-    """Auto-inject workspace/ into sys.path so agent_* modules are importable."""
-    if str(WORKSPACE_ROOT) not in sys.path:
-        sys.path.insert(0, str(WORKSPACE_ROOT))
-    yield
