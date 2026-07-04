@@ -2,7 +2,7 @@
 
 > **状态**：草案 v0.1
 > **日期**：2026-07-05
-> **范围**：为 agent 增加 7 个工具文件（共 8 个 `@function_tool` 函数：read/write/edit/glob/grep/bash + notebook_read/notebook_edit），函数名与 Claude Code 完全对齐
+> **范围**：为 agent 增加 6 个工具文件（每个暴露 1 个 `@function_tool` 函数，共 6 个函数：read/write/edit/glob/grep/bash），函数名与 Claude Code 完全对齐
 > **前置文档**：[2026-07-04-agent-extensibility-design.md](./2026-07-04-agent-extensibility-design.md)（本 spec 是它的"具体工具集"实施）
 
 ---
@@ -27,7 +27,6 @@
 | `glob_files` | `Glob` | 按 glob 模式列文件 |
 | `grep_files` | `Grep` | 按 regex 搜文件内容 |
 | `bash` | `Bash` | 执行 shell 命令 |
-| `notebook_edit` | `NotebookEdit` | 读写 Jupyter notebook（暴露两个函数：`notebook_read` / `notebook_edit`）|
 
 ### 1.3 关键约束（用户已确认）
 
@@ -42,9 +41,9 @@
 
 **做**：
 
-- 在 `workspace/extensions/tools/fs/` 下放 7 个工具文件（6 个单函数工具 + 1 个 notebook 工具文件暴露 2 函数）
+- 在 `workspace/extensions/tools/fs/` 下放 6 个工具文件（每个暴露 1 个 `@function_tool` 函数）
 - 把 `agent_extensions.load_tools` 的 glob 从单层 `*.py` 升级到递归 `**/*.py`（让 `tools/fs/<name>.py` 这种子目录结构也能被加载）
-- 7 个工具文件的单元测试（共 8 个 `@function_tool` 函数）+ E2E 烟雾测试
+- 6 个工具文件的单元测试 + E2E 烟雾测试
 - 一份"工具使用元说明"追加到 `workspace/persona/TOOLS.md`
 
 **不做**（v0.1 明确）：
@@ -74,8 +73,7 @@
 │   │   │       ├── edit_file.py
 │   │   │       ├── glob_files.py
 │   │   │       ├── grep_files.py
-│   │   │       ├── bash.py
-│   │   │       └── notebook_edit.py
+│   │   │       └── bash.py
 │   │   └── mcp/                         # 现有
 │   └── persona/
 │       └── TOOLS.md                     # 追加：fs 工具使用元说明
@@ -83,13 +81,13 @@
     └── fs_tools/                        # 新增：单元测试
         ├── __init__.py
         ├── conftest.py                  # 共享 fixture（tmp_workspace 等）
+        ├── test_sensitive.py
         ├── test_read_file.py
         ├── test_write_file.py
         ├── test_edit_file.py
         ├── test_glob_files.py
         ├── test_grep_files.py
-        ├── test_bash.py
-        └── test_notebook_edit.py
+        └── test_bash.py
 ```
 
 **E2E 测试位置**：`tests/e2e_fs_tools.py`（与现有 `tests/e2e_generate_reply.py` 同级，仿其脚手架；后者因路径过期已被标记为不可用，可作为脚手架参考重写）。
@@ -159,7 +157,7 @@ def register() -> list:
     return [read_file]
 ```
 
-### 3.3 7 个工具的签名与返回契约
+### 3.3 6 个工具的签名与返回契约
 
 | 工具 | 签名 | 错误返回示例 |
 |---|---|---|
@@ -169,9 +167,6 @@ def register() -> list:
 | `glob_files` | `glob_files(pattern: str, path: str = ".") -> str` | `[ERROR] path /x 不存在` |
 | `grep_files` | `grep_files(pattern: str, path: str = ".", include: str = "", max_results: int = 100) -> str` | `[ERROR] pattern 不是合法 regex: ...` |
 | `bash` | `bash(cmd: str, cwd: str = "", timeout: int = 30) -> str` | `[TIMEOUT] 30s 内未完成，已 kill` / `[EXIT N] <stdout+stderr>` |
-| `notebook_edit` | `notebook_read(path: str) -> str` / `notebook_edit(path: str, cell_id: str, new_source: str) -> str` | `[ERROR] 不是合法的 .ipynb JSON` / `[ERROR] cell_id X 不存在` |
-
-> 注：`notebook_edit.py` 是 7 个工具文件中**唯一**暴露 2 个函数的文件。其它 6 个文件（`read_file` / `write_file` / `edit_file` / `glob_files` / `grep_files` / `bash`）每个文件暴露 1 个函数。总计 8 个 `@function_tool` 函数。
 
 **返回值字符串格式约定**：
 - 成功：`"OK: ..."` 或内容直接返回（read 类工具）
@@ -292,7 +287,6 @@ demo 时这一段日志能让操作员一眼看到 agent 在做什么。
 | `glob_files` | 无匹配 | `[]`（空 JSON 数组字符串） |
 | `grep_files` | 无匹配 / pattern 不是合法 regex | `[]` / `[ERROR] pattern 不是合法 regex: ...` |
 | `bash` | 超时 / 非零退出码 | `[TIMEOUT] 30s 内未完成，已 kill` / `[EXIT N] <stdout+stderr>` |
-| `notebook_*` | JSON 解析失败 / cell_id 不存在 | `[ERROR] ...` |
 
 ### 5.3 日志分级
 
@@ -376,7 +370,6 @@ def tmp_workspace(tmp_path) -> Path:
 | `glob_files` | 匹配多个 / 不匹配 / `**/*.py` 递归 / 转义字符 / 路径不存在 |
 | `grep_files` | 单文件匹配 / 跨文件匹配 / 行号格式 `path:lineno:content` / include glob / max_results 截断 / 无匹配 / 非法 regex |
 | `bash` | `echo` 正常 / 非零退出 / 超时（用 `sleep 5` + timeout=1）/ cwd 切换 / 不继承敏感 env（`MY_SECRET=xxx` 应拿不到）|
-| `notebook_edit` | 读 v4 notebook / 替换 cell / cell_id 不存在 / 损坏 JSON |
 
 **断言约定**：
 
@@ -411,7 +404,7 @@ assert json.loads(result) == ["a.txt", "b.txt"]
 7. 若模型**没**调工具直接回答 → 整个 spec 降级
 ```
 
-**Phase 1 E2E**（7 个工具各一个最小场景）：
+**Phase 1 E2E**（6 个工具各一个最小场景）：
 
 | 工具 | 触发 prompt | 验证 |
 |---|---|---|
@@ -421,7 +414,6 @@ assert json.loads(result) == ["a.txt", "b.txt"]
 | `glob_files` | "列 /tmp 下所有 .txt" | 回复列举正确 |
 | `grep_files` | "在 /tmp 下找包含 foo 的文件" | 回复列举正确 |
 | `bash` | "运行 echo hi" | 回复包含 "hi" |
-| `notebook_edit` | 可选 | 单独跑 |
 
 **E2E 通过门槛**：7 工具全部 PASS + worker 日志可见所有 `[fs]` 操作。
 
@@ -467,11 +459,6 @@ Phase 1 E2E 烟雾测试 (7 工具)
 - 触发词："运行 xxx 命令"、"执行 xxx"
 - 默认 timeout 30s，最长 300s
 - 不在白名单的命令也可以跑（v0.1 demo 不限制）
-
-## `notebook_read` / `notebook_edit`
-- 触发词："读 / 改 notebook"、"xxx notebook 里第 N 个 cell"
-- 仅支持 v4 格式 .ipynb；损坏文件返回 `[ERROR]`
-- `cell_id` 用 cell 顶部的 `cell_id` 字段（v4 notebook 自带）；找不到返回 `[ERROR] cell_id X 不存在`
 ```
 
 ---
@@ -515,13 +502,13 @@ Phase 1 E2E 烟雾测试 (7 工具)
 
 | 问题 | 何时决定 |
 |---|---|
-| `notebook_edit` v0.1 是否必做？ | Phase 0 通过后、Phase 1 启动前确认 |
 | `read_file` 是否需要支持 `encoding` 参数？ | 实施时看是否碰到非 UTF-8 文件 |
 | `glob_files` 是否需要排除 `.git/`？ | 实施时确认（默认应当排除，扫仓库会爆）|
 | `edit_file` 是否需要支持正则 old_string？ | 实施时看需求（默认仅字面量替换）|
 | `bash` 是否支持 `&&` / `\|` 管道？ | 是（subprocess 用 `shell=True` 默认支持）|
 | 大文件读截断阈值是 1MB 还是别的？ | 实施时按 prompt 大小实测调整 |
 | `workspace/sandbox/` 还要不要保留？ | 本 spec 用不到；如果未来加 per-user 沙箱再启用 |
+| 未来是否补 `notebook_edit`？ | 用户决策：**当前不需要**。如果将来 agent 跑 notebook 工作流再补；属于 v0.2+ |
 
 ---
 
@@ -546,7 +533,7 @@ Phase 1 E2E 烟雾测试 (7 工具)
 | Bash 白名单 | 默认有白名单 | v0.1 无白名单（用户决策）|
 | Read 截断 | 默认 2000 行 | 同（保持一致）|
 | Edit 反馈 | diff 预览 | v0.1 仅返回 `OK` / `ERROR`；v0.2 加 diff |
-| NotebookEdit | 完整实现 | v0.1 可选；只做 `notebook_read` + `notebook_edit` 两个最小操作 |
+| NotebookEdit | 完整实现 | **本项目不做**（用户决策：notebook 与当前 demo 场景不匹配）|
 | WebFetch / WebSearch | 完整 | 不在本 spec（v0.2 另开）|
 | Task / TodoWrite | 完整 | 不在本 spec（v0.2 另开）|
 
