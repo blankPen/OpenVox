@@ -1,8 +1,11 @@
 """Read agent persona (SOUL/AGENTS/TOOLS) from workspace/persona/."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
+
+logger = logging.getLogger("volcengine-agent")
 
 
 @dataclass
@@ -23,4 +26,9 @@ def load_persona(workspace_root: Path) -> Persona:
     agents = (persona_dir / "AGENTS.md").read_text(encoding="utf-8")
     tools_guide = (persona_dir / "TOOLS.md").read_text(encoding="utf-8")
     combined = "\n\n".join([soul, agents, tools_guide])
+    logger.info(
+        f"[persona] loaded 3 files: "
+        f"SOUL.md={len(soul)}c, AGENTS.md={len(agents)}c, TOOLS.md={len(tools_guide)}c, "
+        f"combined={len(combined)}c"
+    )
     return Persona(soul=soul, agents=agents, tools_guide=tools_guide, combined=combined)

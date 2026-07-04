@@ -1,7 +1,10 @@
 """Per-user memory store backed by markdown files (read path in v0.1)."""
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+
+logger = logging.getLogger("volcengine-agent")
 
 
 class MemoryStore:
@@ -20,12 +23,25 @@ class MemoryStore:
         (self._root / self._USER_FILE).touch(exist_ok=True)
         (self._root / self._MEMORY_FILE).touch(exist_ok=True)
         (self._root / self._DAILY_DIR).mkdir(exist_ok=True)
+        logger.info(
+            f"[memory] MemoryStore init: root={user_root} "
+            f"(User.md / MEMORY.md / memory/ ensured)"
+        )
 
     def load_user_prompt(self) -> str:
         """Concatenate User.md and MEMORY.md (both optional) for system prompt injection."""
         parts: list[str] = []
+        sizes: dict[str, int] = {}
         for name in (self._USER_FILE, self._MEMORY_FILE):
-            text = (self._root / name).read_text(encoding="utf-8").strip()
+            path = self._root / name
+            text = path.read_text(encoding="utf-8").strip()
+            sizes[name] = len(text)
             if text:
                 parts.append(text)
-        return "\n\n".join(parts)
+        result = "\n\n".join(parts)
+        logger.info(
+            f"[memory] load_user_prompt: User.md={sizes['User.md']}c, "
+            f"MEMORY.md={sizes['MEMORY.md']}c → returned {len(result)}c "
+            f"({'empty' if not result else 'injected'})"
+        )
+        return result

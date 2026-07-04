@@ -262,10 +262,18 @@ def build_agent(workspace_root: _Path) -> Agent:
     load_skill = make_load_skill_tool(skills_registry, session_provider)
     tools.append(load_skill)
 
-    logger.info(
-        f"[Agent] build_agent: tools={len(tools)}, skills={len(skills_registry)}, "
-        f"mcp_servers={len(mcp_servers)}"
-    )
+    # 摘要：列清楚每类资源各加载了什么
+    from agent_extensions import _tool_name  # type: ignore[attr-defined]
+    tool_names = [_tool_name(t) for t in tools]
+    skill_names = sorted(skills_registry)
+    mcp_names = [getattr(s, "command", "?") for s in mcp_servers]
+    logger.info("=" * 60)
+    logger.info(f"[Agent] build_agent summary for {workspace_root}:")
+    logger.info(f"[Agent]   persona  : {len(persona.combined)}c system prompt")
+    logger.info(f"[Agent]   skills   : {len(skills_registry)} → {skill_names}")
+    logger.info(f"[Agent]   mcp      : {len(mcp_servers)} → {mcp_names}")
+    logger.info(f"[Agent]   tools    : {len(tools)} → {tool_names}")
+    logger.info("=" * 60)
     return VolcengineAgent(
         instructions=persona.combined,
         tools=tools,
@@ -299,10 +307,22 @@ async def entrypoint(ctx: JobContext) -> None:
             return  # skip self
         if not user_id_future.done():
             user_id_future.set_result(participant.identity)
-            logger.info(f"[Worker] participant_connected: identity={participant.identity}")
+            logger.info(f"[Worker] participant_connected event: identity={participant.identity}")
 
     await ctx.connect()
     logger.info(f"[Worker] 已连接到房间: {ctx.room.name}")
+
+    # 关键：participant_connected 事件**不会**对 agent join 之前已在房里的
+    # 远端触发（典型场景：test 先 dispatch 再 connect，agent 后 join），
+    # 所以 ctx.connect() 之后立刻看 remote_participants。
+    if ctx.room.remote_participants:
+        first = next(iter(ctx.room.remote_participants.values()))
+        if not user_id_future.done():
+            user_id_future.set_result(first.identity)
+            logger.info(
+                f"[Worker] participant already present: identity={first.identity} "
+                f"(skipping wait_for event)"
+            )
 
     # 等远端参与者加入（带超时但不卡事件循环）
     try:
@@ -315,14 +335,19 @@ async def entrypoint(ctx: JobContext) -> None:
 
     # 注入 per-user 长期记忆（connect + 拿到 user_id 之后）
     from agent_memory import MemoryStore
-    memory = MemoryStore(WORKSPACE_ROOT / "users" / user_id)
+    user_dir = WORKSPACE_ROOT / "users" / user_id
+    memory = MemoryStore(user_dir)
     recall = memory.load_user_prompt()
     if recall:
         try:
             session.current_agent.update_chat_ctx(messages=[
                 {"role": "system", "content": recall}
             ])
-            logger.info(f"[Memory] 注入 user={user_id} ({len(recall)} chars)")
+            # 摘要在 build_agent 那行已经打了，这里只标 [Memory]
+            logger.info(
+                f"[Memory] injected user={user_id} {len(recall)}c into chat ctx "
+                f"(from {user_dir})"
+            )
         except Exception as e:
             logger.warning(f"[Memory] 注入失败: {e}")
 

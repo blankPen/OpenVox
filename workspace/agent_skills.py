@@ -1,10 +1,13 @@
 """Scan workspace/skills/ for SKILL.md files and build a load_skill() tool."""
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+
+logger = logging.getLogger("volcengine-agent")
 
 
 @dataclass
@@ -48,12 +51,21 @@ def scan_skills(skills_root: Path) -> dict[str, SkillDef]:
     """
     registry: dict[str, SkillDef] = {}
     if not skills_root.is_dir():
+        logger.info(f"[skills] scan_skills: dir not found {skills_root}, returning empty")
         return registry
-    for skill_md in sorted(skills_root.glob("*/SKILL.md")):
+    skill_files = sorted(skills_root.glob("*/SKILL.md"))
+    logger.info(f"[skills] scan_skills: found {len(skill_files)} SKILL.md in {skills_root}")
+    for skill_md in skill_files:
         skill = _parse_skill_md(skill_md)
         if skill.name in registry:
             raise ValueError(f"duplicate skill name: {skill.name!r}")
         registry[skill.name] = skill
+        scripts_info = f" scripts={skill.scripts_dir.name}" if skill.scripts_dir else ""
+        logger.info(
+            f"[skills]   + {skill.name!r} from {skill_md.relative_to(skills_root.parent)} "
+            f"({len(skill.body)}c body, description={skill.description[:40]!r}{scripts_info})"
+        )
+    logger.info(f"[skills] registered: {sorted(registry)}")
     return registry
 
 
@@ -68,15 +80,28 @@ def make_load_skill_tool(
     """
     from livekit.agents import function_tool
 
+    available_names = ", ".join(sorted(registry)) or "(无)"
+    logger.info(
+        f"[skills] make_load_skill_tool: registered as @function_tool, "
+        f"available={available_names}"
+    )
+
     @function_tool()
     async def load_skill(name: str) -> str:
         """加载名为 <name> 的 skill。加载后该 skill 的指引会注入对话上下文。"""
         skill = registry.get(name)
         if skill is None:
-            available = ", ".join(sorted(registry)) or "(无)"
-            return f"找不到 skill {name!r}，可用：{available}"
+            logger.warning(
+                f"[skills] load_skill({name!r}) FAILED: not found. "
+                f"available={available_names}"
+            )
+            return f"找不到 skill {name!r}，可用：{available_names}"
         session = session_provider()
         session.update_chat_ctx(messages=[{"role": "system", "content": skill.body}])
+        logger.info(
+            f"[skills] load_skill({name!r}) OK: "
+            f"injected {len(skill.body)}c body into chat ctx"
+        )
         return f"已加载 skill {name!r}，可使用其指引。"
 
     return load_skill
