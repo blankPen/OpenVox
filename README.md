@@ -101,31 +101,7 @@ PIPELINE=pipeline python main.py start
 
 ---
 
-## 4. 验证脚本（与 LiveKit 无关，纯发包）
-
-```bash
-source .venv/bin/activate
-python verify_volcengine.py
-```
-
-预期：
-
-```
-[1/4] LLM   → POST https://ark.cn-beijing.volces.com/api/v3/chat/completions
-  ✓ HTTP 200 reply='你好呀，…' tokens=40
-[2/4] TTS   → POST https://openspeech.bytedance.com/api/v3/tts/unidirectional
-  ✓ HTTP 200 received N audio chunks, M bytes of mp3 (saved to tts_sample.mp3)
-[3/4] RT    → WS  wss://openspeech.bytedance.com/api/v3/realtime/dialogue
-  ✓ WS handshake OK — server ack 72 bytes (auth + protocol confirmed)
-[4/4] STT   → WS  wss://openspeech.bytedance.com/api/v3/sauc/bigmodel
-  ⚠ WS handshake refused (server reachable; service not enabled for this app): 403
-```
-
-3/4 端点真打通。第 4 项 STT 403 是火山引擎控制台侧 ASR 服务未开通，不是网络/凭证问题。
-
----
-
-## 5. 故障排查
+## 4. 故障排查
 
 | 现象 | 原因 | 修复 |
 |------|------|------|
@@ -141,12 +117,11 @@ python verify_volcengine.py
 
 ---
 
-## 6. 项目目录结构
+## 5. 项目目录结构
 
 ```
 livekit/
 ├── main.py                                 # 入口：Agent + WorkerOptions
-├── verify_volcengine.py                    # 独立连通性测试脚本（4 个端点）
 ├── .env                                    # 凭证（已 gitignore .local）
 ├── .gitignore
 ├── CLAUDE.md                               # 给 Claude Code 实例看的架构/坑点摘要
@@ -159,15 +134,14 @@ livekit/
 
 ---
 
-## 7. 关键产物
+## 6. 关键产物
 
-- `tts_sample.mp3` — `verify_volcengine.py` 跑通 TTS 时落盘的 21 KB 真音频（ID3 v2.4 / MPEG ADTS / 24 kHz / mono），证明凭证有效。
 - `agent worker id` — 终端 B 启动后日志里的 `registered worker ... id="AW_..."`，记下来便于 `lk dispatch list` 查。
 - `dispatch id` — `lk dispatch create` 输出的 `id:"AD_..."`，可用 `lk dispatch list` / `lk dispatch delete` 管理。
 
 ---
 
-## 8. 下一步（如果你要继续往生产方向推）
+## 7. 下一步（如果你要继续往生产方向推）
 
 1. **STT 开通**：去火山控制台 `https://console.volcengine.com/voice/app` 给 1605412251 勾选「流式语音识别（豆包大模型）」，`PIPELINE=pipeline` 也能用。
 2. **LiveKit Cloud / 自托管生产**：把 `.env` 里的 `LIVEKIT_*` 换成真凭证或自托管 server 配置；`main.py` 不需要改。

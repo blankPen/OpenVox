@@ -14,7 +14,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 目录结构（关键文件）
 
 - **`main.py`** — worker 入口，`VolcengineAgent`、`_build_session`、`_prewarm`，以及三处日志去重的 monkey-patch。
-- **`verify_volcengine.py`** — 独立连通性探针，覆盖 LLM / TTS / Realtime / STT 四个端点。运行后写入 `tts_sample.mp3` 作为音频凭证；任一失败即非零退出。
 - **`livekit.yaml`** — 本地 LiveKit server 配置（端口 7880，密钥 `openz` → secret 哈希）。被 `start-lan.sh` / `start-emu.sh` 挂载进容器；裸的 `livekit-server --dev` 模式使用硬编码的 `devkey/secret` 而忽略此文件。
 - **`Dockerfile`** + **`docker-compose.yml`** — 容器化的 worker。`LIVEKIT_URL` 被覆盖为 `ws://host.docker.internal:7880`，让容器能访问宿主机上的 LiveKit server（Docker Desktop / Docker for Mac）。
 - **`start.sh` / `start-lan.sh` / `start-emu.sh`** — 本地 LiveKit server 的快捷脚本：
@@ -34,7 +33,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | dev 派单模式 | `python main.py dev` |
 | 控制台模式（终端收发） | `python main.py console` |
 | 切到 STT+LLM+TTS 管线 | `PIPELINE=pipeline python main.py start`（默认 `realtime`） |
-| 探活火山引擎端点 | `python verify_volcengine.py` |
 | 冒烟测试插件导入 | `python -c "from livekit.plugins import volcengine; print(volcengine.__all__)"` |
 | 构建并跑容器化 worker | `docker compose build && docker compose up` |
 | 把 agent 派到房间 | `lk dispatch create --dev --room demo --agent-name volcengine-agent` |
@@ -73,7 +71,6 @@ vendored 插件一律用 keyword-only 参数。**不要**照搬 PyPI 上 `liveki
   - 挂载 `livekit.yaml`、去掉 `--dev`（参考 `start-lan.sh` / `start-emu.sh`），让 server 用和 `.env` 一致的 `openz` 密钥。
 - **Mac 上的 Docker 网络** — `docker-compose.yml` 把 `LIVEKIT_URL` 覆盖成 `ws://host.docker.internal:7880`，让容器访问 **宿主机** 的 LiveKit server。如果 server 跑在共享网络的兄弟容器里，要换成服务名（`livekit-local:7880`）。compose 故意用默认 `bridge` 网络 —— 切到 `host` 会把 worker 内部的 8081 IPC 端口暴露到宿主机，并行跑多个 worker 就会撞端口。
 - **"我们装的是 1.2.9" 是个过时的说法**。vendored 插件的 `pyproject.toml` 钉了 1.5.4，但 `pip install -e ... --no-deps` 会跳过这个 pin，加上 dev/Docker 都用 `~=1.5`，实际装的是 1.5.x。代码里所有针对"我们在 1.2.9"做的分支都要更新；唯一仍然有效的 1.2.9 时代怪癖是 `RoomInputOptions` 走 `session.start()` 而不是 `__init__()`。
-- **`verify_volcengine.py` 的 STT 403 是预期的** — 当前 `AppID` 在火山引擎控制台没开通"流式语音识别（豆包大模型）"。端点本身是通的，只是产品侧授权没开。`PIPELINE=realtime` 模式可以绕开。
 - **`.env` 里的 `AGENT_NAME`** — 默认是 `volcengine-agent`，但当前 `.env` 设的是 `AGENT_NAME=openz`。`lk dispatch create --agent-name …` 必须和运行中的 worker 一致，否则派单会一直挂着。
 - **测试** — `tests/e2e_generate_reply.py` 是基于旧的 `vendor/` 路径写的，import 就会失败。要么把 `sys.path.insert` 改成指向 `plugins/livekit-plugins-volcengine/livekit`，要么直接删掉；目前仓库里没有其他测试。
 
