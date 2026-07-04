@@ -146,18 +146,6 @@ class VolcengineAgent(Agent):
         # 把 self.session 暴露给 build_agent() 的 session_provider
         _session_holder[0] = self.session
 
-        # 注入 per-user 长期记忆（user_id 由 entrypoint 写入环境变量）
-        user_id = os.environ.get("_OPENCZ_USER_ID", "")
-        if user_id:
-            from agent_memory import MemoryStore
-            memory = MemoryStore(WORKSPACE_ROOT / "users" / user_id)
-            recall = memory.load_user_prompt()
-            if recall:
-                self.update_chat_ctx(messages=[
-                    {"role": "system", "content": recall}
-                ])
-                logger.info(f"[Memory] 注入 user={user_id} 长期记忆 ({len(recall)} chars)")
-
         # 不在此调用 self.session.generate_reply(...)：vendor 插件的
         # RealtimeSession.generate_reply 是占位实现（vendor/.../realtime.py:824），
         # 5 秒后必抛 RealtimeError，会让框架关闭 session，导致客户端被踢。
@@ -293,14 +281,6 @@ async def entrypoint(ctx: JobContext) -> None:
     # 注意：room_input_options 必须传给 session.start()，不是 AgentSession.__init__()
     # livekit-agents 1.2.9 的 __init__ 不接受此参数；1.5+ 才移到 __init__
 
-    # 等远端参与者加入，取其 identity 作为 user_id（用于 per-user 记忆）
-    import asyncio
-    while not ctx.room.remote_participants:
-        await asyncio.sleep(0.1)
-    user_id = next(iter(ctx.room.remote_participants.values())).identity
-    os.environ["_OPENCZ_USER_ID"] = user_id
-    logger.info(f"[Worker] user_id={user_id}")
-
     await session.start(
         agent=build_agent(WORKSPACE_ROOT),
         room=ctx.room,
@@ -309,9 +289,35 @@ async def entrypoint(ctx: JobContext) -> None:
         ),
     )
 
-    # 直到房间断开连接之前，保持会话运行。
+    # Connect 后 remote_participants 才可见
     await ctx.connect()
     logger.info(f"[Worker] 已连接到房间: {ctx.room.name}")
+
+    # 等远端参与者加入（fake_alice / 真客户端 / 模拟客户端）
+    import asyncio
+    deadline = asyncio.get_event_loop().time() + 15
+    while not ctx.room.remote_participants:
+        if asyncio.get_event_loop().time() > deadline:
+            logger.warning("[Worker] 15s 内无远端参与者")
+            return
+        await asyncio.sleep(0.1)
+    first = next(iter(ctx.room.remote_participants.values()))
+    user_id = first.identity
+    os.environ["_OPENCZ_USER_ID"] = user_id
+    logger.info(f"[Worker] user_id={user_id}")
+
+    # 注入 per-user 长期记忆（connect + 拿到 user_id 之后）
+    from agent_memory import MemoryStore
+    memory = MemoryStore(WORKSPACE_ROOT / "users" / user_id)
+    recall = memory.load_user_prompt()
+    if recall:
+        try:
+            session.current_agent.update_chat_ctx(messages=[
+                {"role": "system", "content": recall}
+            ])
+            logger.info(f"[Memory] 注入 user={user_id} ({len(recall)} chars)")
+        except Exception as e:
+            logger.warning(f"[Memory] 注入失败: {e}")
 
 
 if __name__ == "__main__":

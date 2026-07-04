@@ -61,12 +61,16 @@ def make_load_skill_tool(
     registry: dict[str, SkillDef],
     session_provider: Callable[[], object],
 ) -> Callable:
-    """Return an async function load_skill(name: str) -> str suitable as a tool.
+    """Return a @function_tool-decorated load_skill(name) → str.
 
     When called, injects the skill's body into the session's chat context
     as a system message.
     """
+    from livekit.agents import function_tool
+
+    @function_tool()
     async def load_skill(name: str) -> str:
+        """加载名为 <name> 的 skill。加载后该 skill 的指引会注入对话上下文。"""
         skill = registry.get(name)
         if skill is None:
             available = ", ".join(sorted(registry)) or "(无)"
@@ -75,9 +79,4 @@ def make_load_skill_tool(
         session.update_chat_ctx(messages=[{"role": "system", "content": skill.body}])
         return f"已加载 skill {name!r}，可使用其指引。"
 
-    load_skill.__name__ = "load_skill"
-    load_skill.__doc__ = (
-        "加载名为 <name> 的 skill。加载后该 skill 的指引会注入对话上下文。"
-        "可用 skill 名见当前 tool 列表。"
-    )
     return load_skill
