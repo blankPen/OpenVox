@@ -23,15 +23,20 @@ def _tool_name(tool: Any) -> str:
 
 
 def load_tools(tools_dir: Path) -> list[Any]:
-    """Glob tools_dir/*.py, import each, call module.register() -> list.
+    """Glob tools_dir/**​/*.py recursively, import each, call module.register() -> list.
 
     Files starting with `_` (incl. __init__.py) are skipped.
+    __pycache__ directories are excluded.
     Raises AttributeError if a file has no register() function.
     """
     if not tools_dir.is_dir():
         logger.info(f"[tools] load_tools: dir not found {tools_dir}, returning empty")
         return []
-    py_files = [p for p in sorted(tools_dir.glob("*.py")) if not p.name.startswith("_")]
+    py_files = [
+        p for p in sorted(tools_dir.glob("**/*.py"))
+        if not p.name.startswith("_")
+        and "__pycache__" not in p.parts
+    ]
     logger.info(f"[tools] load_tools: scanning {len(py_files)} files in {tools_dir}")
     tools: list[Any] = []
     for path in py_files:
