@@ -2,7 +2,7 @@
 
 > **状态**：草案 v0.1
 > **日期**：2026-07-05
-> **范围**：为 agent 增加 7 个原子文件操作工具（read/write/edit/glob/grep/bash/notebook_edit），函数名与 Claude Code 完全对齐
+> **范围**：为 agent 增加 7 个工具文件（共 8 个 `@function_tool` 函数：read/write/edit/glob/grep/bash + notebook_read/notebook_edit），函数名与 Claude Code 完全对齐
 > **前置文档**：[2026-07-04-agent-extensibility-design.md](./2026-07-04-agent-extensibility-design.md)（本 spec 是它的"具体工具集"实施）
 
 ---
@@ -27,7 +27,7 @@
 | `glob_files` | `Glob` | 按 glob 模式列文件 |
 | `grep_files` | `Grep` | 按 regex 搜文件内容 |
 | `bash` | `Bash` | 执行 shell 命令 |
-| `notebook_edit` | `NotebookEdit` | 读写 Jupyter notebook |
+| `notebook_edit` | `NotebookEdit` | 读写 Jupyter notebook（暴露两个函数：`notebook_read` / `notebook_edit`）|
 
 ### 1.3 关键约束（用户已确认）
 
@@ -42,9 +42,9 @@
 
 **做**：
 
-- 在 `workspace/extensions/tools/fs/` 下放 7 个工具文件
+- 在 `workspace/extensions/tools/fs/` 下放 7 个工具文件（6 个单函数工具 + 1 个 notebook 工具文件暴露 2 函数）
 - 把 `agent_extensions.load_tools` 的 glob 从单层 `*.py` 升级到递归 `**/*.py`（让 `tools/fs/<name>.py` 这种子目录结构也能被加载）
-- 7 个工具的单元测试 + E2E 烟雾测试
+- 7 个工具文件的单元测试（共 8 个 `@function_tool` 函数）+ E2E 烟雾测试
 - 一份"工具使用元说明"追加到 `workspace/persona/TOOLS.md`
 
 **不做**（v0.1 明确）：
@@ -170,6 +170,8 @@ def register() -> list:
 | `grep_files` | `grep_files(pattern: str, path: str = ".", include: str = "", max_results: int = 100) -> str` | `[ERROR] pattern 不是合法 regex: ...` |
 | `bash` | `bash(cmd: str, cwd: str = "", timeout: int = 30) -> str` | `[TIMEOUT] 30s 内未完成，已 kill` / `[EXIT N] <stdout+stderr>` |
 | `notebook_edit` | `notebook_read(path: str) -> str` / `notebook_edit(path: str, cell_id: str, new_source: str) -> str` | `[ERROR] 不是合法的 .ipynb JSON` / `[ERROR] cell_id X 不存在` |
+
+> 注：`notebook_edit.py` 是 7 个工具文件中**唯一**暴露 2 个函数的文件。其它 6 个文件（`read_file` / `write_file` / `edit_file` / `glob_files` / `grep_files` / `bash`）每个文件暴露 1 个函数。总计 8 个 `@function_tool` 函数。
 
 **返回值字符串格式约定**：
 - 成功：`"OK: ..."` 或内容直接返回（read 类工具）
@@ -324,12 +326,12 @@ logger.warning("[fs] SENSITIVE_PATH read_file(path=%r) 命中敏感路径", path
 ```python
 import os, tempfile
 fd, tmp_path = tempfile.mkstemp(dir=parent_dir, prefix=".tmp_", suffix=".tmp")
-os.write(fd, content.encode("utf-8"))
+os.write(fd, content.encode("utf-8"))   # write_file v0.1 仅支持 UTF-8 文本
 os.close(fd)
 os.replace(tmp_path, target)  # 原子 rename
 ```
 
-避免写到一半崩溃留半截文件。
+避免写到一半崩溃留半截文件。**v0.1 限定**：`write_file` 仅写 UTF-8 文本；非 UTF-8 内容返回 `[ERROR] 内容不是合法 UTF-8`。二进制文件支持留 v0.2。
 
 ---
 
@@ -342,6 +344,8 @@ os.replace(tmp_path, target)  # 原子 rename
 **共享 fixture**（`tests/fs_tools/conftest.py`）：
 
 ```python
+import os
+import sys
 import pytest
 from pathlib import Path
 
@@ -353,7 +357,12 @@ def tmp_workspace(tmp_path) -> Path:
     (tmp_path / "sub" / "data.json").write_text('{"k": "v"}', encoding="utf-8")
     (tmp_path / "big.txt").write_text("x" * 2_000_000, encoding="utf-8")  # 2MB
     (tmp_path / "no_read").write_text("secret")
-    (tmp_path / "no_read").chmod(0o000)  # 无读权限
+    # macOS 忽略非 own 用户的权限位（无论是否 owner），chmod 0o000 不能制造真正的 EACCES。
+    # 在 macOS 上直接跳过权限拒绝测试；Linux/CI 上正常测。
+    if sys.platform != "darwin":
+        (tmp_path / "no_read").chmod(0o000)
+    else:
+        pytest.skip("macOS 忽略 chmod 0o000，跳过权限拒绝测试")
     return tmp_path
 ```
 
@@ -458,6 +467,11 @@ Phase 1 E2E 烟雾测试 (7 工具)
 - 触发词："运行 xxx 命令"、"执行 xxx"
 - 默认 timeout 30s，最长 300s
 - 不在白名单的命令也可以跑（v0.1 demo 不限制）
+
+## `notebook_read` / `notebook_edit`
+- 触发词："读 / 改 notebook"、"xxx notebook 里第 N 个 cell"
+- 仅支持 v4 格式 .ipynb；损坏文件返回 `[ERROR]`
+- `cell_id` 用 cell 顶部的 `cell_id` 字段（v4 notebook 自带）；找不到返回 `[ERROR] cell_id X 不存在`
 ```
 
 ---
