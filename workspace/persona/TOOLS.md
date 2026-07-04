@@ -1,4 +1,11 @@
-# TOOLS（工具使用说明）
+# TOOLS — 工具使用说明
 
-- `current_time` — 查当前时间，需要时调用
-- `load_skill` — 加载名为 `<name>` 的 skill，调它的 body 注入对话上下文
+## `current_time`
+- 触发词："几点"、"几号"、"现在的时间"
+- 必调，**不要**自己估算
+
+## `load_skill`
+- 触发词："加载 XX skill"、"切换到 XX 模式"、"用 XX 方式"
+- 参数是 skill 的 `name`（小写，蛇形/短横线）
+- 加载后该 skill 的指引会注入对话上下文，可直接按其指示回答
+- 找不到对应 name 时向用户说明已有哪些 skill
