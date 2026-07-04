@@ -17,3 +17,4 @@ workspace/skills/*/scripts/*
 # E2E test outputs (audio fixtures/ inputs are tracked; outputs are not)
 tests/fixtures/out/
 .understand-anything
+.claude/worktrees
