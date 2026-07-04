@@ -1,18 +1,23 @@
 """End-to-end test: fake user joins a LiveKit room, exchanges multiple turns of
 audio with the agent, and verifies each agent response is non-silent.
 
-Prerequisites (all in .env):
-- LIVEKIT_URL (e.g. wss://your-livekit-server:7443)
-- LIVEKIT_API_KEY / LIVEKIT_API_SECRET
-- VOLCENGINE_REALTIME_APP_ID / VOLCENGINE_REALTIME_ACCESS_TOKEN
+Prerequisites:
+- A running LiveKit server. Default: ws://localhost:7880 (local docker).
+  Override via E2E_LIVEKIT_URL or LIVEKIT_URL env var. The vendored realtime
+  plugin's WebRTC handshake through Cloudflare tunnel takes >10s and triggers
+  worker process restarts mid-test, so local server is recommended.
+- Worker running: `LIVEKIT_URL=ws://localhost:7880 python main.py start` in
+  another terminal (use the SAME URL as the test).
+- .env with LIVEKIT_API_KEY / LIVEKIT_API_SECRET / VOLCENGINE_REALTIME_*.
+- Audio fixtures in tests/fixtures/audio/ — regenerate via tests/fixtures/gen_audio.py.
 
-The worker must already be running (`python main.py start` in another terminal).
-Audio fixtures must exist under tests/fixtures/audio/ — regenerate with
-`python tests/fixtures/gen_audio.py` if missing.
+The test runs 4 turns: hello / ask_time / load_weather_skill / ask_weather.
+Each turn sends a TTS-synthesized fixture, waits for non-silent response audio,
+asserts non-zero amplitude, and saves the response to tests/fixtures/out/.
 
-Note: We rely on the *agent's opening greeting* and the agent's *response to our
-sent audio* as the audio we record. The realtime mode requires audio input,
-so the full duplex roundtrip is exercised end-to-end.
+To run:
+    source .venv/bin/activate
+    pytest tests/e2e_realtime.py -v -s
 """
 from __future__ import annotations
 
@@ -29,7 +34,8 @@ from livekit import api, rtc
 ROOT = Path(__file__).parent.parent
 load_dotenv(ROOT / ".env")
 
-LIVEKIT_URL = os.environ["LIVEKIT_URL"]
+# Default to local LiveKit (faster, no cloudflared latency). Override with E2E_LIVEKIT_URL.
+LIVEKIT_URL = os.environ.get("E2E_LIVEKIT_URL") or os.environ.get("LIVEKIT_URL", "ws://localhost:7880")
 API_KEY = os.environ["LIVEKIT_API_KEY"]
 API_SECRET = os.environ["LIVEKIT_API_SECRET"]
 AGENT_NAME = os.environ.get("AGENT_NAME", "volcengine-agent")
@@ -40,20 +46,13 @@ OUT_DIR = ROOT / "tests" / "fixtures" / "out"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Multi-turn conversation: each turn is (fixture_name, expected_keywords_any_of)
-# v0.1 baseline: 2 turns. Demonstrated multi-turn (greeting + Q&A).
-# 3+ turns hit two compounding flakiness sources:
-#   1. The vendored realtime plugin's _current_item.text_ch gets closed at end
-#      of each turn's LLM end (event 559), and the recv_task errors with
-#      ChanClosed on subsequent empty LLM deltas in turn N+1.
-#   2. The Cloudflare tunnel (wss://livekit.openz.top:7443) drops WebSocket
-#      connections between turns, causing "closing agent session due to
-#      participant disconnect" mid-test.
-# Fixing (1) requires vendored plugin channel lifecycle rework; (2) requires
-# switching to a local LiveKit server or tunnel keep-alive tweaks. Both are
-# v0.2 work.
+# v0.1 stable: 4 turns with 1.5s pause between turns. Use local LiveKit
+# (ws://localhost:7880) to avoid cloudflared-tunnel-induced worker restart.
 TURNS: list[tuple[str, tuple[str, ...]]] = [
     ("hello", ("你好", "您好", "在", "嗨", "小语", "hello", "hi")),
     ("ask_time", ("点", "时间", "时", "分", "现在")),
+    ("load_weather_skill", ("weather", "天气", "skill", "加载", "已")),
+    ("ask_weather", ("北京", "天气", "晴", "雨", "云", "度", "风", "北")),
 ]
 
 pytestmark = pytest.mark.e2e
@@ -259,8 +258,8 @@ async def _run_test() -> None:
         assert duration > 0.3, f"turn {turn_idx} response too short: {duration:.2f}s"
         assert max_amp >= 200, f"turn {turn_idx} response silent: max_amp={max_amp}"
 
-        # Pause between turns to let any background processing settle
-        await asyncio.sleep(0.5)
+        # Pause between turns to let agent's TTS drain fully before next input
+        await asyncio.sleep(1.5)
 
     await room.disconnect()
     if agent_audio_stream is not None:

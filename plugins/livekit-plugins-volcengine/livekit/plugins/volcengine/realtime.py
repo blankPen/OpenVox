@@ -510,13 +510,14 @@ class RealtimeSession(
             else:
                 self._current_item.modalities.set_result(["audio", "text"])  # type: ignore[union-attr]
 
-            self._current_generation.message_ch.send_nowait(
-                llm.MessageGeneration(
-                    message_id=item_id,
-                    text_stream=self._current_item.text_ch,
-                    audio_stream=self._current_item.audio_ch,
-                    modalities=self._current_item.modalities,
-                )
+            with contextlib.suppress(utils.aio.channel.ChanClosed):
+                self._current_generation.message_ch.send_nowait(
+                    llm.MessageGeneration(
+                        message_id=item_id,
+                        text_stream=self._current_item.text_ch,
+                        audio_stream=self._current_item.audio_ch,
+                        modalities=self._current_item.modalities,
+                    )
             )
 
         @utils.log_exceptions(logger=logger)
@@ -610,12 +611,13 @@ class RealtimeSession(
                                     self._current_item.modalities.set_result(
                                         ["audio", "text"]
                                     )  # type: ignore[union-attr]
-                                self._current_generation.message_ch.send_nowait(
-                                    llm.MessageGeneration(
-                                        message_id=item_id,
-                                        text_stream=self._current_item.text_ch,
-                                        audio_stream=self._current_item.audio_ch,
-                                        modalities=self._current_item.modalities,
+                                with contextlib.suppress(utils.aio.channel.ChanClosed):
+                                    self._current_generation.message_ch.send_nowait(
+                                        llm.MessageGeneration(
+                                            message_id=item_id,
+                                            text_stream=self._current_item.text_ch,
+                                            audio_stream=self._current_item.audio_ch,
+                                            modalities=self._current_item.modalities,
                                     )
                                 )
 
@@ -666,14 +668,15 @@ class RealtimeSession(
                         audio = np.clip(audio, -1.0, 1.0)
                         audio = (audio * 32767).astype(np.int16)
                         audio_bytes = audio.tobytes()
-                        self._current_item.audio_ch.send_nowait(
-                            rtc.AudioFrame(
-                                data=audio_bytes,
-                                sample_rate=self._realtime_model._opts.sample_rate,
-                                num_channels=1,
-                                samples_per_channel=len(audio_bytes) // 2,
+                        with contextlib.suppress(utils.aio.channel.ChanClosed):
+                            self._current_item.audio_ch.send_nowait(
+                                rtc.AudioFrame(
+                                    data=audio_bytes,
+                                    sample_rate=self._realtime_model._opts.sample_rate,
+                                    num_channels=1,
+                                    samples_per_channel=len(audio_bytes) // 2,
+                                )
                             )
-                        )
                     elif event == 350:  # TTSSentenceStart
                         pass
                     elif event == 351:  # TTSSentenceEnd
@@ -681,7 +684,8 @@ class RealtimeSession(
                     elif event == 359:  # TTSEnded
                         logger.info("tts end")
                         logger.info("[TTS] ✅ 语音合成结束")
-                        self._current_item.audio_ch.close()
+                        with contextlib.suppress(utils.aio.channel.ChanClosed):
+                            self._current_item.audio_ch.close()
                         if self._is_opening:
                             # opening 路径：服务端不发 LLMResponse (550) 事件，
                             # 直接返回 TTS 音频。vendor 在 TTSEnded 时把 _opts.opening
@@ -689,11 +693,15 @@ class RealtimeSession(
                             opening_text = self._realtime_model._opts.opening
                             logger.info(f"[Agent 回复] 🗣️ {opening_text!r}")
                             self._llm_text_buffer = ""
-                            self._current_item.text_ch.send_nowait(opening_text)
-                            self._current_item.text_ch.close()
+                            with contextlib.suppress(utils.aio.channel.ChanClosed):
+                                self._current_item.text_ch.send_nowait(opening_text)
+                            with contextlib.suppress(utils.aio.channel.ChanClosed):
+                                self._current_item.text_ch.close()
                             self._is_opening = False
-                        self._current_generation.message_ch.close()
-                        self._current_generation.function_ch.close()
+                        with contextlib.suppress(utils.aio.channel.ChanClosed):
+                            self._current_generation.message_ch.close()
+                        with contextlib.suppress(utils.aio.channel.ChanClosed):
+                            self._current_generation.function_ch.close()
                         self._current_generation = None
                         self._first_tts_response = True
                     elif event == 550:  # 模型回复的文本内容
@@ -705,7 +713,8 @@ class RealtimeSession(
                         logger.info(f"[LLM] 💬 模型生成: {text!r}")
                         # 累积到 buffer，559 事件时整句打印
                         self._llm_text_buffer += text
-                        self._current_item.text_ch.send_nowait(text)
+                        with contextlib.suppress(utils.aio.channel.ChanClosed):
+                            self._current_item.text_ch.send_nowait(text)
                     elif event == 559:  # 模型回复文本结束事件
                         logger.info("llm end")
                         # 整句汇总日志：把 550 累积的 buffer 一次性打印，便于一眼看清 agent 完整回复
@@ -715,7 +724,8 @@ class RealtimeSession(
                             )
                             self._llm_text_buffer = ""
                         logger.info("[LLM] ✅ 模型回复文本生成完毕")
-                        self._current_item.text_ch.close()
+                        with contextlib.suppress(utils.aio.channel.ChanClosed):
+                            self._current_item.text_ch.close()
                         self._first_llm_response = True
                     else:
                         pass
@@ -960,12 +970,13 @@ class RealtimeSession(
         else:
             self._current_item.modalities.set_result(["audio", "text"])  # type: ignore[union-attr]
 
-        self._current_generation.message_ch.send_nowait(
-            llm.MessageGeneration(
-                message_id=item_id,
-                text_stream=self._current_item.text_ch,
-                audio_stream=self._current_item.audio_ch,
-                modalities=self._current_item.modalities,
+        with contextlib.suppress(utils.aio.channel.ChanClosed):
+            self._current_generation.message_ch.send_nowait(
+                llm.MessageGeneration(
+                    message_id=item_id,
+                    text_stream=self._current_item.text_ch,
+                    audio_stream=self._current_item.audio_ch,
+                    modalities=self._current_item.modalities,
             )
         )
 
