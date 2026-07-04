@@ -10,8 +10,9 @@ import pytest
 from agent_extensions import load_mcp_servers, load_tools
 
 
-def test_load_tools_collects_register_calls(workspace_root: Path):
-    tools_dir = workspace_root / "extensions" / "tools"
+def test_load_tools_collects_register_calls(tmp_path: Path):
+    tools_dir = tmp_path / "tools"
+    tools_dir.mkdir()
     (tools_dir / "fake_a.py").write_text(dedent("""\
         async def fake_a() -> str:
             '''Tool A.'''
@@ -30,15 +31,17 @@ def test_load_tools_collects_register_calls(workspace_root: Path):
     assert len(tools) == 2
 
 
-def test_load_tools_skips_dunder_and_underscore(workspace_root: Path):
-    tools_dir = workspace_root / "extensions" / "tools"
+def test_load_tools_skips_dunder_and_underscore(tmp_path: Path):
+    tools_dir = tmp_path / "tools"
+    tools_dir.mkdir()
     (tools_dir / "_private.py").write_text("def register(): return []", encoding="utf-8")
     tools = load_tools(tools_dir)
     assert tools == []  # _private.py 跳过
 
 
-def test_load_tools_missing_register_raises(workspace_root: Path):
-    tools_dir = workspace_root / "extensions" / "tools"
+def test_load_tools_missing_register_raises(tmp_path: Path):
+    tools_dir = tmp_path / "tools"
+    tools_dir.mkdir()
     (tools_dir / "broken.py").write_text("x = 1", encoding="utf-8")
     with pytest.raises(AttributeError, match="register"):
         load_tools(tools_dir)
