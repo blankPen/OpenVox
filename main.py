@@ -290,19 +290,26 @@ async def entrypoint(ctx: JobContext) -> None:
     )
 
     # Connect 后 remote_participants 才可见
+    # 用事件而不是轮询，避免 worker process 重启时卡 15s
+    user_id_future: asyncio.Future[str] = asyncio.get_event_loop().create_future()
+
+    @ctx.room.on("participant_connected")
+    def _on_participant_connected(participant):
+        if participant.identity == ctx.room.local_participant.identity:
+            return  # skip self
+        if not user_id_future.done():
+            user_id_future.set_result(participant.identity)
+            logger.info(f"[Worker] participant_connected: identity={participant.identity}")
+
     await ctx.connect()
     logger.info(f"[Worker] 已连接到房间: {ctx.room.name}")
 
-    # 等远端参与者加入（fake_alice / 真客户端 / 模拟客户端）
-    import asyncio
-    deadline = asyncio.get_event_loop().time() + 15
-    while not ctx.room.remote_participants:
-        if asyncio.get_event_loop().time() > deadline:
-            logger.warning("[Worker] 15s 内无远端参与者")
-            return
-        await asyncio.sleep(0.1)
-    first = next(iter(ctx.room.remote_participants.values()))
-    user_id = first.identity
+    # 等远端参与者加入（带超时但不卡事件循环）
+    try:
+        user_id = await asyncio.wait_for(user_id_future, timeout=20.0)
+    except asyncio.TimeoutError:
+        logger.warning("[Worker] 20s 内无远端参与者")
+        return
     os.environ["_OPENCZ_USER_ID"] = user_id
     logger.info(f"[Worker] user_id={user_id}")
 

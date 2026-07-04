@@ -441,6 +441,9 @@ class RealtimeSession(
             self._realtime_model._ensure_http_session().ws_connect(
                 url=url,
                 headers=headers,
+                # WebSocket-level heartbeat: 防止 Volcengine Realtime 服务端
+                # 因 idle (~30s) 断开连接（实测 2 轮对话后会触发 recv task error）
+                heartbeat=30.0,
             ),
             self._realtime_model._opts.conn_options.timeout,
         )
