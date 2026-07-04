@@ -40,11 +40,17 @@ OUT_DIR = ROOT / "tests" / "fixtures" / "out"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Multi-turn conversation: each turn is (fixture_name, expected_keywords_any_of)
-# v0.1 stable at 2 turns. 3+ turns sometimes fail because the vendored realtime
-# plugin's _current_item.text_ch (or similar) gets closed after a couple of
-# turns, and the recv_task then errors on ChanClosed(), which kills the whole
-# WebSocket loop. v0.2 will fix the channel lifecycle in the vendored plugin
-# (or add reconnect logic).
+# v0.1 baseline: 2 turns. Demonstrated multi-turn (greeting + Q&A).
+# 3+ turns hit two compounding flakiness sources:
+#   1. The vendored realtime plugin's _current_item.text_ch gets closed at end
+#      of each turn's LLM end (event 559), and the recv_task errors with
+#      ChanClosed on subsequent empty LLM deltas in turn N+1.
+#   2. The Cloudflare tunnel (wss://livekit.openz.top:7443) drops WebSocket
+#      connections between turns, causing "closing agent session due to
+#      participant disconnect" mid-test.
+# Fixing (1) requires vendored plugin channel lifecycle rework; (2) requires
+# switching to a local LiveKit server or tunnel keep-alive tweaks. Both are
+# v0.2 work.
 TURNS: list[tuple[str, tuple[str, ...]]] = [
     ("hello", ("你好", "您好", "在", "嗨", "小语", "hello", "hi")),
     ("ask_time", ("点", "时间", "时", "分", "现在")),
@@ -151,9 +157,10 @@ async def _run_test() -> None:
     print("[e2e] dispatching agent...")
     await _dispatch_agent()
 
-    # 2. Connect as fake participant
-    print("[e2e] connecting as fake_alice...")
-    token = await _gen_token("fake_alice", ROOM_NAME)
+    # 2. Connect as fake participant (unique identity per run to avoid stale state)
+    fake_identity = f"fake_alice_{os.getpid()}_{int(asyncio.get_event_loop().time())}"
+    print(f"[e2e] connecting as {fake_identity}...")
+    token = await _gen_token(fake_identity, ROOM_NAME)
     room = rtc.Room()
 
     # 3. Subscribe to agent audio IMMEDIATELY when track_subscribed fires.
@@ -175,7 +182,7 @@ async def _run_test() -> None:
     @room.on("track_subscribed")
     def on_track(track, publication, participant):
         nonlocal agent_audio_stream
-        if participant.identity == "fake_alice":
+        if participant.identity == fake_identity:
             return
         if track.kind != rtc.TrackKind.KIND_AUDIO:
             return
