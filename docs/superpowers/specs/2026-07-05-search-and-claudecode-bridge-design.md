@@ -161,9 +161,9 @@ async def claude_task_status(task_id: str) -> str:
 
     Returns:
         - "status=running" —— 还在跑
-        - "status=ready\n<summary.md 全文>" —— 已完成，返回口语版总结
         - "status=summarizing" —— 跑完了但总结还在生成
-        - "status=failed\n<error 摘要>" —— 失败
+        - "status=ready\n<summary.md 全文>" —— 已完成，**返回 summary.md 全文**（由 summarizer 控制在 ≤100 字，小语可直接念给用户）
+        - "status=failed\n<summary.md 前 500 字>" —— 失败，**返回 summary.md 前 500 字**（失败时 summary.md 写 stderr 前 500 字）
         - "[ERROR] task <task_id> not found" —— 短码无效
     """
 ```
@@ -187,8 +187,8 @@ async def claude_task_continue(task_id: str, prompt: str) -> str:
 
 实现要点：
 - 只允许在 `status=ready` 状态上续接（避免与正在跑的进程撞）
-- 把新 prompt append 到 `task.json.continuations: [...]` 数组
-- 把现有 `output.md` 和 `summary.md` 备份到 `<task_id>/archive/v<N>/`，**避免被覆盖**
+- 把新 prompt append 到 `task.json.continuations: [...]` 数组（首条 `prompt` 字段保留为初始 prompt，后续续接 push 到 `continuations`）
+- 把现有 `output.md` 和 `summary.md` 备份到 `<task_id>/archive/v<continue_seq>/`（**N = 当前 continue_seq**，续接前是 1，续接一次后变 2，备份当前内容到 `archive/v1/`，**避免被覆盖**）
 - 启动新一轮 `claude --print` 并把 N+1 写回 `task.json`
 
 ---
@@ -224,18 +224,23 @@ process.on_exit 回调
 ### 4.2 状态机
 
 ```
-created → running → summarizing → ready
-                            ↘ failed (LLM 总结失败时降级为 output.md 前 500 字)
+created → running ──→ summarizing ──→ ready
+                    │              ↘
+                    │               failed (LLM 总结失败，降级为 output.md 前 500 字)
+                    │
+                    └─→ failed (后台进程非零退出，跳过 summarizing，summary.md = stderr 前 500 字)
 ```
 
 `task.json.status` 字段取值为：`created` | `running` | `summarizing` | `ready` | `failed`
 
 ### 4.3 Summarizer 实现
 
+> **注意**：summarizer 必须**独立构造** `volcengine.LLM`，**不能**借用当前 LiveKit session 里的 qwen-realtime 模型。原因：(a) qwen 是语音实时模型，未必走 OpenAI 兼容 chat 接口；(b) summarizer 在后台协程跑，跟 session 解耦。summarizer 用项目 `.env` 里的 `VOLCENGINE_LLM_API_KEY`。
+
 ```python
 # workspace/claude_task_runner.py
 async def _summarize(task_id: str, full_output: str) -> str:
-    """用项目自己的 LLM (volcengine.LLM) 把长输出压成 3-5 句口语版。"""
+    """用 volcengine.LLM 把长输出压成 3-5 句口语版。"""
     prompt = f"""请把以下 Claude Code 调研结果压缩成 3-5 句中文口语版总结，
     用于语音助手告诉用户。不超过 100 字。保留关键结论和数据。
     不要 markdown、不要 emoji、不要项目符号。
