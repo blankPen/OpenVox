@@ -26,7 +26,7 @@ from livekit.agents import (
     cli,
 )
 from livekit.agents.voice.room_io import RoomInputOptions, TextInputEvent
-from livekit.plugins import volcengine
+from livekit.plugins import qwen, volcengine
 
 # 从 .env 文件中加载环境变量，覆盖当前进程环境。仅在开发和本地运行时使用。
 load_dotenv()
@@ -301,8 +301,11 @@ if str(WORKSPACE_ROOT) not in _sys.path:
 # （v0.1 简化实现；v0.2 改成把 session_provider 注入到 agent 实例属性）
 _session_holder: list[AgentSession | None] = [None]
 
-# 默认使用 realtime 模式，可通过 PIPELINE=pipeline 切换到分离 STT/LLM/TTS 模式。
-PIPELINE = os.environ.get("PIPELINE", "realtime")  # "realtime" 或 "pipeline"
+# 默认使用 realtime 模式，可通过 PIPELINE 切换：
+#   "realtime"        → Volcengine 端到端语音
+#   "pipeline"        → Volcengine STT/LLM/TTS 分离
+#   "qwen-realtime"   → 千问 Qwen3.5-Omni 端到端语音（原生 function calling）
+PIPELINE = os.environ.get("PIPELINE", "realtime")
 
 
 def _bool_env(name: str, default: bool) -> bool:
@@ -350,16 +353,16 @@ class VolcengineAgent(Agent):
         _session_holder[0] = self.session
 
         # 主动打招呼的策略：
-        # - realtime 模式不在此调用 generate_reply(...)，因为 vendor 的
-        #   RealtimeSession.generate_reply 是占位实现
-        #   （vendor/.../realtime.py:824），5 秒后必抛 RealtimeError。
-        #   realtime 改由 RealtimeModel(opening=) 在 vendor WebSocket 层
-        #   主动发 hello_request（vendor/.../realtime.py:457）。
+        # - realtime / qwen-realtime 模式不在此调用 generate_reply(...)，
+        #   因为 realtime 模型有自己的 opening 机制（volcengine 通过 hello_request，
+        #   千问通过 response.create 触发开场白）。
         # - pipeline 模式是标准 chat-mode，generate_reply() 会触发 LLM 出
         #   一句开场白并经 TTS 合成广播，让客户端进房就能听到招呼声。
         if PIPELINE == "pipeline":
             logger.info("[Agent] (pipeline) 主动打招呼")
             await self.session.generate_reply()
+        elif PIPELINE == "qwen-realtime":
+            logger.info("[Agent] 小语(Qwen)进入房间，等待与用户交互")
         else:
             logger.info("[Agent] 小语进入房间，等待与用户交互")
 
@@ -398,7 +401,7 @@ def _prewarm(proc) -> AgentSession:
 def _build_session() -> AgentSession:
     """根据当前 PIPELINE 配置构建 AgentSession。"""
     if PIPELINE == "pipeline":
-        # 方案 B：将语音识别、语言模型、语音合成分离成独立组件。
+        # Volcengine STT + LLM + TTS 分离管线
         return AgentSession(
             stt=volcengine.STT(
                 app_id=os.environ["VOLCENGINE_STT_APP_ID"],
@@ -414,17 +417,27 @@ def _build_session() -> AgentSession:
             ),
         )
 
-    # 方案 A：使用 Volcengine Realtime 端到端语音模型。
-    # RealtimeModel 需要 bot_name 来标识语音代理的角色。
-    #
+    if PIPELINE == "qwen-realtime":
+        # Qwen3.5-Omni 端到端实时语音 — 原生支持 function calling。
+        # semantic_vad 可过滤无意义语音，与 function calling 配合更自然。
+        model = os.environ.get("QWEN_MODEL", "qwen3.5-omni-plus-realtime")
+        voice = os.environ.get("QWEN_VOICE", "Tina")
+        opening = os.environ.get("QWEN_OPENING") or "你好啊，今天过得怎么样？"
+        logger.info(f"[Qwen] building session: model={model} voice={voice}")
+        return AgentSession(
+            llm=qwen.RealtimeModel(
+                model=model,
+                voice=voice,
+                opening=opening,
+                turn_detection_type="semantic_vad",
+            ),
+        )
+
+    # Volcengine Realtime 端到端语音 — 不支持 function calling。
     # opening= 让 vendor 插件在 ws 连接就绪后自动发一句 hello_request，
-    # 实现"进入房间主动打招呼"的效果；这条路径是 vendor 内部完整实现的
-    # （vendor/.../realtime.py:457-487），而 vendor 的 generate_reply 是
-    # 未完成的占位实现（vendor/.../realtime.py:824），必须避开。
-    #
+    # 实现"进入房间主动打招呼"的效果。
     # 可选的联网搜索功能依赖独立的 Volcengine AI 联网搜索产品，
     # 需要在控制台中激活并把 API Key 填入 VOLCENGINE_WEBSEARCH_API_KEY。
-    # 如果不启用或未提供该 Key，agent 会回退到离线训练知识。
     return AgentSession(
         llm=volcengine.RealtimeModel(
             app_id=os.environ["VOLCENGINE_REALTIME_APP_ID"],
