@@ -138,6 +138,59 @@ def _patched_parse_function_tools(self, fmt: str) -> list:
 if not hasattr(_ToolContext, "parse_function_tools"):
     _ToolContext.parse_function_tools = _patched_parse_function_tools  # type: ignore[attr-defined]
 
+# livekit-agents 1.2.9 的 ``function_arguments_to_pydantic_model`` 把带默认值
+# 的参数（如 ``read_file(path: str, start_line: int = 0)``）错误地标记为必填，
+# 因为它把 ``FieldInfo.default`` 设到 Pydantic FieldInfo 实例上，但 Pydantic v2
+# 的 ``create_model`` 不会从 ``FieldInfo.default`` 读默认值。结果：LLM 按 schema
+# 只传 ``path``，框架的 prepare_function_arguments 在 Pydantic validation 时
+# 抛 ValidationError → 工具调用被拒 → LLM 重试 → 失败，最终回退为 ``[]`` 文本。
+# shim 用 ``(type, default_or_ellipsis)`` tuple 语法重写 model 构造，匹配
+# Pydantic v2 create_model 的实际约定。
+import inspect as _inspect_p  # noqa: E402
+from pydantic import create_model as _create_model  # noqa: E402
+from pydantic.fields import Field as _PField  # noqa: E402
+from pydantic_core import PydanticUndefined as _PUndef  # noqa: E402
+from livekit.agents.llm import utils as _llm_utils  # noqa: E402
+
+if not hasattr(_llm_utils, "_PATCHED_FAPM"):
+    _orig_fapm = _llm_utils.function_arguments_to_pydantic_model  # type: ignore[attr-defined]
+
+    def _patched_fapm(func):  # type: ignore[no-untyped-def]
+        """1.2.9 → 1.5.x 兼容：default 参数生成的 Pydantic field 也标记为 optional。"""
+        from docstring_parser import parse_from_object  # noqa: PLC0415
+
+        fnc_names = func.__name__.split("_")
+        fnc_name = "".join(x.capitalize() for x in fnc_names)
+        model_name = fnc_name + "Args"
+        docstring = parse_from_object(func)
+        param_docs = {p.arg_name: p.description for p in docstring.params}
+        signature = _inspect_p.signature(func)
+
+        fields: dict = {}
+        for param_name, param in signature.parameters.items():
+            # 用 param.annotation 而非 typing.get_type_hints（避免 _inspect_p 的 stub 问题）
+            type_hint = param.annotation
+            if type_hint is _inspect_p.Parameter.empty:
+                continue
+            if _llm_utils.is_context_type(type_hint):  # type: ignore[attr-defined]
+                continue
+            default_value = param.default if param.default is not param.empty else _inspect_p.Parameter.empty
+            fi = _PField()
+            if default_value is not _inspect_p.Parameter.empty and fi.default is _PUndef:
+                fi.default = default_value
+            if fi.description is None:
+                fi.description = param_docs.get(param_name, None)
+            # 关键：把 default 直接作为 tuple 第二项，而不是放在 FieldInfo.default。
+            # Pydantic v2 create_model 只认这种形式。
+            if default_value is not _inspect_p.Parameter.empty:
+                fields[param_name] = (type_hint, default_value)
+            else:
+                fields[param_name] = (type_hint, ...)
+        return _create_model(model_name, **fields)
+
+    _llm_utils.function_arguments_to_pydantic_model = _patched_fapm  # type: ignore[assignment]
+    _llm_utils._PATCHED_FAPM = True  # type: ignore[attr-defined]
+
 # 把 volcengine.LLM 每轮 assistant 文本作为 [LLM-TEXT] 标记打日志，
 # 方便 E2E 测试和事后排查用 grep 抓关键词。volcengine 插件默认 INFO 级别只
 # 打 llm start / llm first response / llm end 这种事件，不打实际文本。
@@ -154,8 +207,12 @@ async def _patched_llm_run(self) -> None:  # type: ignore[no-untyped-def]
 
     def _wrapped_parse(chunk_id, choice):
         delta = getattr(choice, "delta", None)
-        if delta is not None and getattr(delta, "content", None):
-            text_parts.append(delta.content)
+        if delta is not None:
+            content = getattr(delta, "content", None)
+            # 只累积字符串 content。LLM 有时会把 delta.content 设为 []（空 list）
+            # 而非 None，过滤掉以免 "".join() 产生字面 "[]"。
+            if isinstance(content, str) and content:
+                text_parts.append(content)
         return _orig_parse(chunk_id, choice)
 
     self._parse_choice = _wrapped_parse  # type: ignore[method-assign]

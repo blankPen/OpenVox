@@ -29,6 +29,11 @@ FIXTURES = [
     ("ask_time", "现在几点了"),
     ("load_weather_skill", "加载 weather skill"),
     ("ask_weather", "北京今天天气怎么样"),
+    # fs tools coverage (e2e_pipeline.py 第二轮 fs 测试用)
+    ("e2e_fs_read", "请读一下 ws_test/read.txt 的内容"),
+    ("e2e_fs_write", "请在 ws_test 创建一个 write.txt 内容为 hello from fs e2e"),
+    ("e2e_fs_glob", "请列出 ws_test 目录下的 txt 文件"),
+    ("e2e_fs_bash", "请用 ls 查看 ws_test 下有什么文件"),
 ]
 
 OUT_DIR = ROOT / "tests" / "fixtures" / "audio"
