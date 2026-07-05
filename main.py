@@ -131,6 +131,9 @@ WORKSPACE_ROOT = _Path(__file__).parent / "workspace"
 if str(WORKSPACE_ROOT) not in _sys.path:
     _sys.path.insert(0, str(WORKSPACE_ROOT))
 
+# 让 claude_task 工具在子进程也能找到 workspace 根（不需要再走 sys.path 推断）
+os.environ.setdefault("AGENT_WORKSPACE_ROOT", str(WORKSPACE_ROOT))
+
 # load_skill() 工具需要拿到当前 session 才能调 update_chat_ctx。
 # 用模块级 holder 共享：build_agent() 写入 closure 读，on_enter() 写入 holder。
 # （v0.1 简化实现；v0.2 改成把 session_provider 注入到 agent 实例属性）
@@ -324,7 +327,10 @@ def build_agent(workspace_root: _Path) -> Agent:
     from agent_extensions import _tool_name  # type: ignore[attr-defined]
     tool_names = [_tool_name(t) for t in tools]
     skill_names = sorted(skills_registry)
-    mcp_names = [getattr(s, "command", "?") for s in mcp_servers]
+    mcp_names = [
+        getattr(s, "command", None) or getattr(s, "url", "?")
+        for s in mcp_servers
+    ]
     logger.info("=" * 60)
     logger.info(f"[Agent] build_agent summary for {workspace_root}:")
     logger.info(f"[Agent]   persona  : {len(persona.combined)}c system prompt")
