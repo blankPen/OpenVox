@@ -47,149 +47,9 @@ logging.getLogger("livekit_api").setLevel(logging.WARNING)
 # 阻止 LiveKit 的 cli.log.setup_logging 在 start/dev 命令中再次添加 JSON handler，
 # 否则每条日志会打印两次（一次我们的格式，一次 JSON）。
 # 我们已经手动设置了 logging.basicConfig，所以让 setup_logging 什么都不做。
-# 注意：livekit-agents 1.2.x 的 cli/_run.py 模块用 `from .log import setup_logging`
-# （局部导入），所以必须同时 monkey-patch 模块层和 _run 模块层才能生效。
-# livekit-agents 1.5.x 把 cli/_run.py 合并进了 cli/cli.py，_run 子模块已不存在，
-# 这里 try/except 兼容两种版本。
 from livekit.agents.cli import log as _cli_log  # noqa: E402
 
 _cli_log.setup_logging = lambda *args, **kwargs: None  # type: ignore[assignment]
-try:
-    # 1.2.x: cli/_run.py 是独立子模块，需要第二次 patch
-    from livekit.agents.cli import _run as _cli_run  # noqa: E402
-
-    _cli_run.setup_logging = lambda *args, **kwargs: None  # type: ignore[assignment]
-except ImportError:
-    # 1.5.x: cli/_run.py 已合并进 cli/cli.py，setup_logging 只剩一个入口
-    pass
-
-# vendored livekit-plugins-volcengine 的 utils.to_fnc_ctx() 调用
-# ``ToolContext(fnc_ctx).parse_function_tools("openai")``，但这个方法是
-# livekit-agents 1.5.x 才加的；当前 venv 装的是 1.2.9（CLAUDE.md 提到的
-# 1.5.x 是 intent，但 venv 实际未升级）。如果不打这个 shim，pipeline 模式
-# 的 LLM._run() 会在 to_fnc_ctx 处抛 AttributeError，整个 STT→LLM→TTS 链路
-# 永远走不到 TTS。
-#
-# shim 用 inspect.signature() 反推每个 @function_tool 的参数类型，组装成
-# OpenAI 的 ChatCompletionToolParam 格式。仅支持 "openai"（volcengine.LLM
-# 是 OpenAI 兼容的，唯一调用方）。
-import inspect as _inspect  # noqa: E402
-
-from livekit.agents.llm import ToolContext as _ToolContext  # noqa: E402
-
-
-def _patched_parse_function_tools(self, fmt: str) -> list:
-    """1.5.x 的 ToolContext.parse_function_tools 的 1.2.9 兼容实现。
-
-    仅实现 volcengine.LLM 实际调用的 ``fmt="openai"`` 分支：把
-    ``self.function_tools`` 转成 ``[{"type": "function", "function": {name, description, parameters}}]``。
-    """
-    if fmt != "openai":
-        # volcengine.LLM 只用 "openai"；其他格式直接返回空，触发框架的
-        # "tool 不支持" 兜底（避免 AttributeError 把整个 LLM 调用搞挂）。
-        return []
-
-    result = []
-    for _name, tool in self.function_tools.items():
-        info = getattr(tool, "__livekit_tool_info", None)
-        if info is None:
-            continue
-        parameters = {"type": "object", "properties": {}, "required": []}
-        try:
-            sig = _inspect.signature(tool)
-            properties = {}
-            required = []
-            for pname, param in sig.parameters.items():
-                ann = param.annotation
-                if ann is _inspect.Parameter.empty or ann is str:
-                    ptype = "string"
-                elif ann is int:
-                    ptype = "integer"
-                elif ann is float:
-                    ptype = "number"
-                elif ann is bool:
-                    ptype = "boolean"
-                elif ann is list:
-                    ptype = "array"
-                elif ann is dict:
-                    ptype = "object"
-                else:
-                    ptype = "string"
-                properties[pname] = {"type": ptype}
-                if param.default is _inspect.Parameter.empty:
-                    required.append(pname)
-            if properties:
-                parameters = {"type": "object", "properties": properties, "required": required}
-        except (TypeError, ValueError):
-            # C 函数 / inspect 失败 → 保留默认空 schema（OpenAI 仍可接受）
-            pass
-        result.append({
-            "type": "function",
-            "function": {
-                "name": info.name,
-                "description": info.description or "",
-                "parameters": parameters,
-            },
-        })
-    return result
-
-
-# 已经在 1.5.x 上时不需要这个 shim（已经原生有 parse_function_tools）
-if not hasattr(_ToolContext, "parse_function_tools"):
-    _ToolContext.parse_function_tools = _patched_parse_function_tools  # type: ignore[attr-defined]
-
-# livekit-agents 1.2.9 的 ``function_arguments_to_pydantic_model`` 把带默认值
-# 的参数（如 ``read_file(path: str, start_line: int = 0)``）错误地标记为必填，
-# 因为它把 ``FieldInfo.default`` 设到 Pydantic FieldInfo 实例上，但 Pydantic v2
-# 的 ``create_model`` 不会从 ``FieldInfo.default`` 读默认值。结果：LLM 按 schema
-# 只传 ``path``，框架的 prepare_function_arguments 在 Pydantic validation 时
-# 抛 ValidationError → 工具调用被拒 → LLM 重试 → 失败，最终回退为 ``[]`` 文本。
-# shim 用 ``(type, default_or_ellipsis)`` tuple 语法重写 model 构造，匹配
-# Pydantic v2 create_model 的实际约定。
-import inspect as _inspect_p  # noqa: E402
-from pydantic import create_model as _create_model  # noqa: E402
-from pydantic.fields import Field as _PField  # noqa: E402
-from pydantic_core import PydanticUndefined as _PUndef  # noqa: E402
-from livekit.agents.llm import utils as _llm_utils  # noqa: E402
-
-if not hasattr(_llm_utils, "_PATCHED_FAPM"):
-    _orig_fapm = _llm_utils.function_arguments_to_pydantic_model  # type: ignore[attr-defined]
-
-    def _patched_fapm(func):  # type: ignore[no-untyped-def]
-        """1.2.9 → 1.5.x 兼容：default 参数生成的 Pydantic field 也标记为 optional。"""
-        from docstring_parser import parse_from_object  # noqa: PLC0415
-
-        fnc_names = func.__name__.split("_")
-        fnc_name = "".join(x.capitalize() for x in fnc_names)
-        model_name = fnc_name + "Args"
-        docstring = parse_from_object(func)
-        param_docs = {p.arg_name: p.description for p in docstring.params}
-        signature = _inspect_p.signature(func)
-
-        fields: dict = {}
-        for param_name, param in signature.parameters.items():
-            # 用 param.annotation 而非 typing.get_type_hints（避免 _inspect_p 的 stub 问题）
-            type_hint = param.annotation
-            if type_hint is _inspect_p.Parameter.empty:
-                continue
-            if _llm_utils.is_context_type(type_hint):  # type: ignore[attr-defined]
-                continue
-            default_value = param.default if param.default is not param.empty else _inspect_p.Parameter.empty
-            fi = _PField()
-            if default_value is not _inspect_p.Parameter.empty and fi.default is _PUndef:
-                fi.default = default_value
-            if fi.description is None:
-                fi.description = param_docs.get(param_name, None)
-            # 关键：把 default 直接作为 tuple 第二项，而不是放在 FieldInfo.default。
-            # Pydantic v2 create_model 只认这种形式。
-            if default_value is not _inspect_p.Parameter.empty:
-                fields[param_name] = (type_hint, default_value)
-            else:
-                fields[param_name] = (type_hint, ...)
-        return _create_model(model_name, **fields)
-
-    _llm_utils.function_arguments_to_pydantic_model = _patched_fapm  # type: ignore[assignment]
-    _llm_utils._PATCHED_FAPM = True  # type: ignore[attr-defined]
 
 # pipeline 模式中文语音日志（用户说了什么 + AI 回复了什么）：
 # - STT 最终识别结果 → [用户语音] 标签（本节 patch）
@@ -255,31 +115,6 @@ async def _patched_llm_run(self) -> None:  # type: ignore[no-untyped-def]
 
 
 _VolcLLMStream._run = _patched_llm_run  # type: ignore[assignment]
-
-# 阻止子进程的 root logger 同时走 IPC 和 stdout（造成每条日志重复输出）。
-# LiveKit fork 出子进程后，proc_client.initialize_logger() 会把 root logger
-# 设为 NOTSET 并 addHandler(LogQueueHandler) — 但**不**移除我们从主进程继承的
-# StreamHandler。子进程就会通过 stdout 输出一次，再通过 IPC 发回主进程输出一次。
-# 修复：monkey-patch 让 initialize_logger 先移除 root logger 的所有 StreamHandler
-# 再加 IPC handler；这样日志只在主进程输出一次。
-import logging as _logging  # noqa: E402
-from livekit.agents.ipc import proc_client as _proc_client  # noqa: E402
-
-# livekit-agents 1.5+ 移除了 _ProcClient.initialize_logger（logger 初始化逻辑
-# 已经合并到 cli.setup_logging 路径）。这段 patch 是 1.2.9 时代的兼容代码，1.5+
-# 不需要再处理。
-if hasattr(_proc_client._ProcClient, "initialize_logger"):
-    _orig_init_logger = _proc_client._ProcClient.initialize_logger
-
-    def _patched_init_logger(self) -> None:  # type: ignore[no-untyped-def]
-        # 移除从主进程继承的所有 StreamHandler（保留其他 handler 类型）
-        root_logger = _logging.getLogger()
-        for h in list(root_logger.handlers):
-            if isinstance(h, _logging.StreamHandler):
-                root_logger.removeHandler(h)
-        _orig_init_logger(self)
-
-    _proc_client._ProcClient.initialize_logger = _patched_init_logger  # type: ignore[assignment]
 
 logger = logging.getLogger("volcengine-agent")
 
@@ -509,8 +344,7 @@ async def entrypoint(ctx: JobContext) -> None:
     logger.info(f"[Worker] 收到任务，正在加入房间: {ctx.room.name} (pipeline={PIPELINE})")
 
     session = _build_session()
-    # 注意：room_input_options 必须传给 session.start()，不是 AgentSession.__init__()
-    # livekit-agents 1.2.9 的 __init__ 不接受此参数；1.5+ 才移到 __init__
+    # room_input_options 传给 session.start()（livekit-agents 1.5+ 也可在 __init__ 中传入）
 
     await session.start(
         agent=build_agent(WORKSPACE_ROOT),
