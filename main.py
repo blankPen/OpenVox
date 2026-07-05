@@ -47,13 +47,17 @@ logging.getLogger("livekit_api").setLevel(logging.WARNING)
 # 阻止 LiveKit 的 cli.log.setup_logging 在 start/dev 命令中再次添加 JSON handler，
 # 否则每条日志会打印两次（一次我们的格式，一次 JSON）。
 # 我们已经手动设置了 logging.basicConfig，所以让 setup_logging 什么都不做。
-# 注意：_run.py 用的是 `from .log import setup_logging`（局部导入），所以必须
-# 同时 monkey-patch 模块层和 _run 模块层才能生效。
+# 注意：livekit-agents 1.5.x 把 setup_logging 移到 cli 包内部（不再有独立 _run 模块），
+# 这里只 patch cli.log 模块层即可。原始代码同步 patch _run 是 1.2.9 时代的兼容性代码。
+try:
+    from livekit.agents.cli import _run as _cli_run  # type: ignore[attr-defined]  # noqa: E402
+    _cli_run.setup_logging = lambda *args, **kwargs: None  # type: ignore[attr-defined]
+except ImportError:
+    # livekit-agents 1.5+: _run 模块已移除（setup_logging 在 cli.log 里）
+    pass
 from livekit.agents.cli import log as _cli_log  # noqa: E402
-from livekit.agents.cli import _run as _cli_run  # noqa: E402
 
 _cli_log.setup_logging = lambda *args, **kwargs: None  # type: ignore[assignment]
-_cli_run.setup_logging = lambda *args, **kwargs: None  # type: ignore[assignment]
 
 # 阻止子进程的 root logger 同时走 IPC 和 stdout（造成每条日志重复输出）。
 # LiveKit fork 出子进程后，proc_client.initialize_logger() 会把 root logger
@@ -64,19 +68,21 @@ _cli_run.setup_logging = lambda *args, **kwargs: None  # type: ignore[assignment
 import logging as _logging  # noqa: E402
 from livekit.agents.ipc import proc_client as _proc_client  # noqa: E402
 
-_orig_init_logger = _proc_client._ProcClient.initialize_logger
+# livekit-agents 1.5+ 移除了 _ProcClient.initialize_logger（logger 初始化逻辑
+# 已经合并到 cli.setup_logging 路径）。这段 patch 是 1.2.9 时代的兼容代码，1.5+
+# 不需要再处理。
+if hasattr(_proc_client._ProcClient, "initialize_logger"):
+    _orig_init_logger = _proc_client._ProcClient.initialize_logger
 
+    def _patched_init_logger(self) -> None:  # type: ignore[no-untyped-def]
+        # 移除从主进程继承的所有 StreamHandler（保留其他 handler 类型）
+        root_logger = _logging.getLogger()
+        for h in list(root_logger.handlers):
+            if isinstance(h, _logging.StreamHandler):
+                root_logger.removeHandler(h)
+        _orig_init_logger(self)
 
-def _patched_init_logger(self) -> None:  # type: ignore[no-untyped-def]
-    # 移除从主进程继承的所有 StreamHandler（保留其他 handler 类型）
-    root_logger = _logging.getLogger()
-    for h in list(root_logger.handlers):
-        if isinstance(h, _logging.StreamHandler):
-            root_logger.removeHandler(h)
-    _orig_init_logger(self)
-
-
-_proc_client._ProcClient.initialize_logger = _patched_init_logger  # type: ignore[assignment]
+    _proc_client._ProcClient.initialize_logger = _patched_init_logger  # type: ignore[assignment]
 
 logger = logging.getLogger("volcengine-agent")
 
