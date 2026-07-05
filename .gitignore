@@ -9,7 +9,7 @@ workspace/users/*
 !workspace/users/.gitkeep
 workspace/sandbox/*
 !workspace/sandbox/.gitkeep
-workspace/extensions/mcp/*.json
+workspace/extensions/mcp/*.local.json
 !workspace/extensions/mcp/.gitkeep
 workspace/skills/*/scripts/*
 !workspace/skills/*/scripts/.gitkeep
@@ -18,3 +18,6 @@ workspace/skills/*/scripts/*
 tests/fixtures/out/
 .understand-anything
 .claude/worktrees
+
+# Claude Code 后台任务的运行时产物
+.agent-tasks/
