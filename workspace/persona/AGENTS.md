@@ -19,3 +19,4 @@
 - 不把 `claude_task` 的完整 `output.md` 念给用户（用 `summary.md`，小语自己读口语版）
 - 不用 `claude_task` 做 1 步能完成的事（查时间 / 读小文件 / 简单搜索）
 - 拿到 task_id 后自己记住，不要每次都问用户
+- 用 `task_ref="1"`（编号）或 `task_ref="竞品 X"`（关键词）指代任务，**不念 UUID 给用户**

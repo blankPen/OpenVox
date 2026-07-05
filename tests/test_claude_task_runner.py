@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -33,10 +34,14 @@ from claude_task_runner import (
 )
 
 
-def test_new_task_id_is_8_hex_chars() -> None:
+def test_new_task_id_is_uuid() -> None:
+    """task_id 现在是完整 UUID（Claude Code --session-id 要求）。"""
+    from claude_task_runner import short_id
+    import uuid as _uuid
     tid = new_task_id()
-    assert len(tid) == 8
-    int(tid, 16)  # 不抛 = 是合法 hex
+    parsed = _uuid.UUID(tid)
+    assert str(parsed) == tid
+    assert short_id(tid) == tid[:8]
 
 
 def test_load_task_returns_none_for_missing(tmp_path: Path) -> None:
@@ -191,6 +196,156 @@ def test_start_task_no_claude_cli(tmp_path: Path, monkeypatch) -> None:
     rec, err = start_task(tmp_path, "调研 X")
     assert rec is None
     assert "claude CLI" in err
+
+
+def test_list_tasks_returns_empty(tmp_path: Path) -> None:
+    """空目录返回空列表（include_history=False 时）。"""
+    from claude_task_runner import list_tasks
+    assert list_tasks(tmp_path, include_history=False) == []
+    assert list_tasks(tmp_path, status_filter="running", include_history=False) == []
+
+
+def test_list_tasks_orders_by_started_at_desc(tmp_path: Path) -> None:
+    from claude_task_runner import list_tasks, save_task, TaskRecord, STATUS_READY
+    save_task(tmp_path, TaskRecord(id="aaa11111-1111-1111-1111-111111111111", prompt="first", status=STATUS_READY, started_at=100.0))
+    save_task(tmp_path, TaskRecord(id="bbb22222-2222-2222-2222-222222222222", prompt="second", status=STATUS_READY, started_at=200.0))
+    save_task(tmp_path, TaskRecord(id="ccc33333-3333-3333-3333-333333333333", prompt="third", status=STATUS_READY, started_at=300.0))
+    assert [r.id for r in list_tasks(tmp_path, include_history=False)] == [
+        "ccc33333-3333-3333-3333-333333333333",
+        "bbb22222-2222-2222-2222-222222222222",
+        "aaa11111-1111-1111-1111-111111111111",
+    ]
+
+
+def test_list_tasks_filters_by_status(tmp_path: Path) -> None:
+    from claude_task_runner import list_tasks, save_task, TaskRecord, STATUS_READY, STATUS_FAILED
+    save_task(tmp_path, TaskRecord(id="aaa11111-1111-1111-1111-111111111111", prompt="p1", status=STATUS_READY, started_at=100.0))
+    save_task(tmp_path, TaskRecord(id="bbb22222-2222-2222-2222-222222222222", prompt="p2", status=STATUS_FAILED, started_at=200.0))
+    save_task(tmp_path, TaskRecord(id="ccc33333-3333-3333-3333-333333333333", prompt="p3", status=STATUS_READY, started_at=300.0))
+    ready = list_tasks(tmp_path, status_filter=STATUS_READY, include_history=False)
+    assert [r.id for r in ready] == [
+        "ccc33333-3333-3333-3333-333333333333",
+        "aaa11111-1111-1111-1111-111111111111",
+    ]
+    failed = list_tasks(tmp_path, status_filter=STATUS_FAILED, include_history=False)
+    assert [r.id for r in failed] == ["bbb22222-2222-2222-2222-222222222222"]
+
+
+def test_list_tasks_includes_history(tmp_path: Path, monkeypatch) -> None:
+    """include_history=True 时合并 ~/.claude/history.jsonl。"""
+    from pathlib import Path as _Path
+    from claude_task_runner import list_tasks
+
+    fake_home = tmp_path / "fake_home"
+    fake_home.mkdir()
+    (fake_home / ".claude").mkdir()
+    (fake_home / ".claude" / "history.jsonl").write_text(
+        '{"sessionId":"hist-uuid-1","display":"历史会话 1","timestamp":1700000000000,"project":"/some/path"}\n'
+        '{"sessionId":"hist-uuid-2","display":"历史会话 2","timestamp":1700000001000,"project":"/some/path"}\n',
+        encoding="utf-8",
+    )
+    # _read_history_jsonl 用 Path.home()，直接 monkeypatch Path 模块的 home
+    monkeypatch.setattr(_Path, "home", staticmethod(lambda: fake_home))
+
+    records = list_tasks(tmp_path, include_history=True, project_cwd="/some/path")
+    ids = [r.id for r in records]
+    assert "hist-uuid-1" in ids
+    assert "hist-uuid-2" in ids
+    history_records = [r for r in records if r.id.startswith("hist-uuid-")]
+    for r in history_records:
+        assert r.status == "history"
+
+
+def test_list_tasks_history_filter_by_project(tmp_path: Path, monkeypatch) -> None:
+    """project_cwd 过滤生效。"""
+    from pathlib import Path as _Path
+    from claude_task_runner import list_tasks
+
+    fake_home = tmp_path / "fake_home"
+    fake_home.mkdir()
+    (fake_home / ".claude").mkdir()
+    (fake_home / ".claude" / "history.jsonl").write_text(
+        '{"sessionId":"projA-1","display":"A","timestamp":1,"project":"/A"}\n'
+        '{"sessionId":"projB-1","display":"B","timestamp":2,"project":"/B"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(_Path, "home", staticmethod(lambda: fake_home))
+
+    only_a = list_tasks(tmp_path, include_history=True, project_cwd="/A")
+    assert [r.id for r in only_a] == ["projA-1"]
+
+
+def test_list_tasks_runner_takes_priority(tmp_path: Path, monkeypatch) -> None:
+    """runner 管理的任务和 history 同 sessionId 时，runner 优先。"""
+    from pathlib import Path as _Path
+    from claude_task_runner import list_tasks, save_task, TaskRecord, STATUS_READY
+
+    fake_home = tmp_path / "fake_home"
+    fake_home.mkdir()
+    (fake_home / ".claude").mkdir()
+    (fake_home / ".claude" / "history.jsonl").write_text(
+        '{"sessionId":"same-uuid","display":"from history","timestamp":100,"project":"/p"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(_Path, "home", staticmethod(lambda: fake_home))
+
+    save_task(tmp_path, TaskRecord(id="same-uuid", prompt="from runner", status=STATUS_READY, started_at=200.0))
+
+    records = list_tasks(tmp_path, include_history=True, project_cwd="/p")
+    same = [r for r in records if r.id == "same-uuid"]
+    assert len(same) == 1
+    assert same[0].status == STATUS_READY
+    assert same[0].prompt == "from runner"
+
+
+def test_count_active_tasks(tmp_path: Path) -> None:
+    from claude_task_runner import (
+        count_active_tasks, save_task, TaskRecord,
+        STATUS_CREATED, STATUS_RUNNING, STATUS_SUMMARIZING, STATUS_READY, STATUS_FAILED,
+    )
+    save_task(tmp_path, TaskRecord(id="a1", prompt="p", status=STATUS_CREATED, started_at=1.0))
+    save_task(tmp_path, TaskRecord(id="a2", prompt="p", status=STATUS_RUNNING, started_at=1.0))
+    save_task(tmp_path, TaskRecord(id="a3", prompt="p", status=STATUS_SUMMARIZING, started_at=1.0))
+    save_task(tmp_path, TaskRecord(id="r1", prompt="p", status=STATUS_READY, started_at=1.0))
+    save_task(tmp_path, TaskRecord(id="f1", prompt="p", status=STATUS_FAILED, started_at=1.0))
+    assert count_active_tasks(tmp_path) == 3
+
+
+def test_concurrency_limit_blocks_when_full(tmp_path: Path, monkeypatch) -> None:
+    from claude_task_runner import (
+        start_task, save_task, TaskRecord, STATUS_RUNNING, MAX_CONCURRENT_TASKS,
+    )
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda x: "/usr/local/bin/claude")
+    for i in range(MAX_CONCURRENT_TASKS):
+        save_task(tmp_path, TaskRecord(id=f"full{i:04d}", prompt="p", status=STATUS_RUNNING, started_at=1.0))
+
+    class FakeLoop:
+        def create_task(self, coro):
+            coro.close()
+            return None
+    monkeypatch.setattr(asyncio, "get_running_loop", lambda: FakeLoop())
+
+    rec, err = start_task(tmp_path, "调研 X")
+    assert rec is None
+    assert "并发上限" in err
+    assert str(MAX_CONCURRENT_TASKS) in err
+
+
+def test_concurrency_limit_allows_when_below(tmp_path: Path, monkeypatch) -> None:
+    from claude_task_runner import start_task, save_task, TaskRecord, STATUS_RUNNING, MAX_CONCURRENT_TASKS
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda x: "/usr/local/bin/claude")
+    for i in range(MAX_CONCURRENT_TASKS - 1):
+        save_task(tmp_path, TaskRecord(id=f"f{i:04d}", prompt="p", status=STATUS_RUNNING, started_at=1.0))
+    class FakeLoop:
+        def create_task(self, coro):
+            coro.close()
+            return None
+    monkeypatch.setattr(asyncio, "get_running_loop", lambda: FakeLoop())
+    rec, err = start_task(tmp_path, "调研 X")
+    assert err == ""
+    assert rec is not None
 
 
 def test_all_statuses_contains_expected() -> None:

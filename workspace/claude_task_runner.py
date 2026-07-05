@@ -76,7 +76,17 @@ def _summary_path(workspace_root: Path, task_id: str) -> Path:
 
 
 def new_task_id() -> str:
-    return uuid.uuid4().hex[:8]
+    """生成新的 task_id = 完整 UUID 字符串。
+
+    必须是 UUID 因为 Claude Code 的 --session-id / --resume 参数要求 valid UUID。
+    短码 = task_id[:8]，给用户口头/UI 友好用，内部全用完整 UUID。
+    """
+    return str(uuid.uuid4())
+
+
+def short_id(task_id: str) -> str:
+    """从 UUID 字符串取前 8 位当短码。仅展示用。"""
+    return task_id[:8] if task_id else ""
 
 
 def load_task(workspace_root: Path, task_id: str) -> TaskRecord | None:
@@ -169,22 +179,34 @@ async def _run_claude_subprocess(
     task_id: str,
     prompt: str,
     add_dir: Path,
-) -> int:
-    """启动 claude --print 子进程；写 output.md / stderr.log；返回 exit_code。"""
+    resume: bool = False,
+) -> tuple[int, str]:
+    """启动 claude --print 子进程；写 output.md / stderr.log。
+
+    Returns:
+        (exit_code, final_task_id) —— final_task_id 在 CLI 分配真实 sessionId 后
+        会跟传入的 task_id 不同（已迁移目录）。caller 必须用返回值。
+    """
+    # 用 json 输出，方便抓 session_id
     cmd = [
         "claude",
         "--print",
         prompt,
         "--add-dir", str(add_dir),
         "--append-system-prompt", "你是中文助手，结果用中文输出",
-        "--output-format", "text",
+        "--output-format", "json",
         "--dangerously-skip-permissions",
     ]
+    if resume:
+        cmd += ["--resume", task_id]
     update_status(workspace_root, task_id, status=STATUS_RUNNING)
     output_path = _output_path(workspace_root, task_id)
     stderr_path = _stderr_path(workspace_root, task_id)
 
-    logger.info("[claude_task] START task=%s cmd=%s", task_id, " ".join(cmd[:3]) + " ...")
+    logger.info(
+        "[claude_task] START task=%s mode=%s cmd=%s",
+        task_id, "resume" if resume else "new", " ".join(cmd[:3]) + " ...",
+    )
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
@@ -193,8 +215,29 @@ async def _run_claude_subprocess(
     stdout, stderr = await proc.communicate()
     exit_code = proc.returncode if proc.returncode is not None else -1
 
-    output_path.write_text(stdout.decode("utf-8", errors="replace"), encoding="utf-8")
-    stderr_path.write_text(stderr.decode("utf-8", errors="replace"), encoding="utf-8")
+    stdout_text = stdout.decode("utf-8", errors="replace")
+    stderr_text = stderr.decode("utf-8", errors="replace")
+
+    # 从 json 输出里抓 CLI 真实分配的 session_id，**覆盖**初始 task_id
+    if not resume:
+        real_session_id = _extract_session_id_from_json(stdout_text)
+        if real_session_id and real_session_id != task_id:
+            logger.info(
+                "[claude_task] CLI assigned session_id=%s (was task_id=%s), migrating",
+                real_session_id, task_id,
+            )
+            # 把 task.json 的 id 改成真实 session_id，并迁移目录
+            _migrate_task_id(workspace_root, task_id, real_session_id)
+            task_id = real_session_id
+            output_path = _output_path(workspace_root, task_id)
+            stderr_path = _stderr_path(workspace_root, task_id)
+
+    output_path.write_text(stdout_text, encoding="utf-8")
+    stderr_path.write_text(stderr_text, encoding="utf-8")
+
+    # 兼容 json 输出：再单独写一份 .text.md 存 result 字段（方便 summarizer 用）
+    if not resume:
+        _write_text_extract(output_path, stdout_text)
 
     logger.info(
         "[claude_task] EXIT task=%s exit=%d stdout=%dB stderr=%dB",
@@ -206,16 +249,92 @@ async def _run_claude_subprocess(
         exit_code=exit_code,
         finished_at=time.time(),
     )
-    return exit_code
+    return (exit_code, task_id)
+
+
+def _extract_session_id_from_json(stdout: str) -> str | None:
+    """从 claude --print --output-format json 的 stdout 抓 session_id 字段。"""
+    import json as _json
+    try:
+        data = _json.loads(stdout)
+    except _json.JSONDecodeError:
+        return None
+    sid = data.get("session_id")
+    return sid if isinstance(sid, str) else None
+
+
+def _migrate_task_id(workspace_root: Path, old_id: str, new_id: str) -> None:
+    """CLI 分配了真实 sessionId 后，把 runner 目录从 old_id 改名到 new_id。
+
+    关键：new_id 才是后续 --resume 用的 ID。
+    """
+    old_dir = _task_dir(workspace_root, old_id)
+    new_dir = _task_dir(workspace_root, new_id)
+    # 防御性：确认 old_dir 真的在 _tasks_root 下，避免 rename 把父目录搬走
+    tasks_root = _tasks_root(workspace_root)
+    try:
+        old_dir.relative_to(tasks_root)
+        new_dir.relative_to(tasks_root)
+    except ValueError:
+        logger.error(
+            "[claude_task] migrate path escape detected! old=%s new=%s root=%s",
+            old_dir, new_dir, tasks_root,
+        )
+        return
+    if new_dir.exists():
+        logger.warning(
+            "[claude_task] migrate target exists, skipping: old=%s new=%s",
+            old_id, new_id,
+        )
+        return
+    if not old_dir.is_dir():
+        logger.warning("[claude_task] migrate source missing: %s", old_dir)
+        return
+    if old_dir == new_dir:
+        return
+    logger.info("[claude_task] rename %s -> %s", old_dir.name, new_dir.name)
+    old_dir.rename(new_dir)
+    task_json = new_dir / "task.json"
+    if task_json.is_file():
+        try:
+            data = json.loads(task_json.read_text(encoding="utf-8"))
+            data["id"] = new_id
+            task_json.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning("[claude_task] update task.json id failed: %r", e)
+
+
+def _write_text_extract(output_path: Path, stdout: str) -> None:
+    """从 json 输出里抽 result 字段写到 .text.md，summarizer 优先读这个。
+
+    json 失败时 fallback 到 stdout 全文。
+    """
+    import json as _json
+    text = None
+    try:
+        data = _json.loads(stdout)
+        text = data.get("result")
+    except _json.JSONDecodeError:
+        pass
+    if not text:
+        return
+    text_path = output_path.with_suffix(".text.md")
+    text_path.write_text(text, encoding="utf-8")
 
 
 async def _summarize(workspace_root: Path, task_id: str) -> None:
-    """Summarizer: 把 output.md 压缩成 3-5 句口语版写入 summary.md。
+    """Summarizer: 把 output 压缩成 3-5 句口语版写入 summary.md。
 
+    优先读 .text.md（json 输出里的 result 字段，纯文本）。
     失败时降级为 output.md 前 500 字。
     """
     output_path = _output_path(workspace_root, task_id)
-    full_output = output_path.read_text(encoding="utf-8") if output_path.is_file() else ""
+    text_path = output_path.with_suffix(".text.md")
+    # 优先 text 提取（CLI json 输出里的 result 字段）
+    if text_path.is_file():
+        full_output = text_path.read_text(encoding="utf-8")
+    else:
+        full_output = output_path.read_text(encoding="utf-8") if output_path.is_file() else ""
 
     rec = load_task(workspace_root, task_id)
     if rec is None:
@@ -234,6 +353,7 @@ async def _summarize(workspace_root: Path, task_id: str) -> None:
     summary = ""
     try:
         from livekit.plugins import volcengine
+        from livekit.agents.llm import ChatContext
         llm = volcengine.LLM(
             model="doubao-1-5-pro-32k-250115",
             api_key=os.environ["VOLCENGINE_LLM_API_KEY"],
@@ -244,11 +364,16 @@ async def _summarize(workspace_root: Path, task_id: str) -> None:
             "不要 markdown、不要 emoji、不要项目符号。\n\n"
             f"原始输出:\n{full_output[:6000]}"
         )
-        stream = llm.chat(messages=[{"role": "user", "content": prompt}])
+        chat_ctx = ChatContext(items=[{"role": "user", "content": prompt}])
+        stream = llm.chat(chat_ctx=chat_ctx)
         chunks: list[str] = []
         async for chunk in stream:
-            delta = getattr(chunk, "delta", None)
-            if delta is not None:
+            # LLMStream 产出 ChatChunk；ChatChunk 有 .choices[0].delta.content
+            choices = getattr(chunk, "choices", None) or []
+            for choice in choices:
+                delta = getattr(choice, "delta", None)
+                if delta is None:
+                    continue
                 content = getattr(delta, "content", None)
                 if isinstance(content, str) and content:
                     chunks.append(content)
@@ -275,6 +400,14 @@ def start_task(workspace_root: Path, prompt: str) -> tuple[TaskRecord | None, st
     if not _claude_exists():
         return None, "claude CLI 未安装"
 
+    # 并发上限拦截（AGENTS.md 要求 ≤ 3）
+    active = count_active_tasks(workspace_root)
+    if active >= MAX_CONCURRENT_TASKS:
+        return None, (
+            f"并发上限 {MAX_CONCURRENT_TASKS}，当前已有 {active} 个任务在跑。"
+            f"请先用 claude_task_status 查一下，等其中一些跑完再开新任务。"
+        )
+
     task_id = new_task_id()
     task_dir = _task_dir(workspace_root, task_id)
     try:
@@ -294,10 +427,12 @@ def start_task(workspace_root: Path, prompt: str) -> tuple[TaskRecord | None, st
 
     async def _runner() -> None:
         try:
-            exit_code = await _run_claude_subprocess(workspace_root, task_id, prompt, add_dir)
-            await _summarize(workspace_root, task_id)
-            # 完整跑完一轮后归档（保留历史供用户回看）
-            _archive_old_outputs_on_completion(workspace_root, task_id)
+            exit_code, final_id = await _run_claude_subprocess(
+                workspace_root, task_id, prompt, add_dir,
+            )
+            # 用 final_id（CLI 分配的真实 sessionId，迁移后）做后续操作
+            await _summarize(workspace_root, final_id)
+            _archive_old_outputs_on_completion(workspace_root, final_id)
         except Exception as e:
             logger.exception("[claude_task] RUNNER_CRASH task=%s", task_id)
             try:
@@ -334,9 +469,11 @@ def continue_task(workspace_root: Path, task_id: str, prompt: str) -> tuple[Task
 
     async def _runner() -> None:
         try:
-            exit_code = await _run_claude_subprocess(workspace_root, task_id, prompt, add_dir)
-            await _summarize(workspace_root, task_id)
-            _archive_old_outputs_on_completion(workspace_root, task_id)
+            exit_code, final_id = await _run_claude_subprocess(
+                workspace_root, task_id, prompt, add_dir, resume=True,
+            )
+            await _summarize(workspace_root, final_id)
+            _archive_old_outputs_on_completion(workspace_root, final_id)
         except Exception as e:
             logger.exception("[claude_task] CONTINUE_CRASH task=%s", task_id)
             try:
@@ -374,3 +511,99 @@ def get_task_status(workspace_root: Path, task_id: str) -> tuple[str, str]:
     summary_path = _summary_path(workspace_root, task_id)
     body = summary_path.read_text(encoding="utf-8") if summary_path.is_file() else ""
     return rec.status, body
+
+def list_tasks(
+    workspace_root: Path,
+    status_filter: str = "",
+    include_history: bool = False,
+    project_cwd: str | None = None,
+) -> list[TaskRecord]:
+    """列出任务，按 started_at 倒序。
+
+    数据源（合并去重）：
+    1. .agent-tasks/<task_id>/ —— runner 管理的任务（带 status/summary.md）
+    2. ~/.claude/history.jsonl —— Claude Code 全局历史（display + sessionId）
+       可选按 project 字段过滤（project_cwd），空 = 不过滤。
+
+    Args:
+        status_filter: 可选状态过滤（running/ready/failed/...）。
+                       **仅对 runner 管理的任务生效**，history 里没有 status 概念。
+        include_history: True = 合并 ~/.claude/history.jsonl；False = 只看 runner
+        project_cwd: 过滤 history.jsonl 里 project 字段等于此值的会话。
+                     None 或空 = 不过滤。
+    """
+    out: dict[str, TaskRecord] = {}
+
+    # 源 1: runner 管理的任务
+    tasks_root = _tasks_root(workspace_root)
+    if tasks_root.is_dir():
+        for d in tasks_root.iterdir():
+            if not d.is_dir() or d.name.startswith("."):
+                continue
+            rec = load_task(workspace_root, d.name)
+            if rec is None:
+                continue
+            if status_filter and rec.status != status_filter:
+                continue
+            out[rec.id] = rec
+
+    # 源 2: ~/.claude/history.jsonl —— 真实 Claude Code 历史会话
+    if include_history:
+        for hist_rec in _read_history_jsonl(project_cwd):
+            # runner 管理的优先级高（带完整 status/summary）
+            if hist_rec.id in out:
+                continue
+            out[hist_rec.id] = hist_rec
+
+    result = list(out.values())
+    result.sort(key=lambda r: r.started_at, reverse=True)
+    return result
+
+
+def _read_history_jsonl(project_cwd: str | None) -> list[TaskRecord]:
+    """解析 ~/.claude/history.jsonl，过滤出当前项目的会话。
+
+    每行 JSON: {display, pastedContents, timestamp, project, sessionId}
+    """
+    history_path = Path.home() / ".claude" / "history.jsonl"
+    if not history_path.is_file():
+        return []
+    out: list[TaskRecord] = []
+    try:
+        with history_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                session_id = entry.get("sessionId")
+                display = entry.get("display", "")
+                timestamp_ms = entry.get("timestamp", 0)
+                project = entry.get("project", "")
+                if not session_id:
+                    continue
+                if project_cwd and project != project_cwd:
+                    continue
+                # 转成 TaskRecord（status 用 "history" 占位以区分 runner 的状态）
+                out.append(TaskRecord(
+                    id=session_id,
+                    prompt=display or "(empty)",
+                    status="history",  # 来自 history.jsonl，没法知道当前是否在跑
+                    started_at=timestamp_ms / 1000.0,
+                ))
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning("[claude_task] read history.jsonl failed: %r", e)
+    return out
+
+
+def count_active_tasks(workspace_root: Path) -> int:
+    """统计当前处于 created/running/summarizing 状态的任务数。"""
+    active = {STATUS_CREATED, STATUS_RUNNING, STATUS_SUMMARIZING}
+    return sum(1 for r in list_tasks(workspace_root) if r.status in active)
+
+
+# 并发上限：AGENTS.md 说"不要同时启动超过 3 个 claude_task"
+MAX_CONCURRENT_TASKS = 3
