@@ -607,23 +607,23 @@ class RealtimeSession(
                 with contextlib.suppress(utils.aio.channel.ChanClosed):
                     self._current_item.audio_ch.close()
 
-            if self._current_generation is not None:
-                with contextlib.suppress(utils.aio.channel.ChanClosed):
-                    self._current_generation.message_ch.close()
             # 关键：有 function_call 时不能立即关闭 function_ch！
             # 框架的 _read_fnc_stream (tee consumer 1) 先读 function call，
             # 然后阻塞等待更多数据；perform_tool_executions (tee consumer 2)
             # 要等 _read_fnc_stream 退出后才开始消费。
             # 延迟关闭让 consumer 1 能收到 EOF 退出，同时 consumer 2 的
             # 缓冲区已有 function call 副本可读。
-            if not has_function_call:
+            if self._current_generation is not None:
                 with contextlib.suppress(utils.aio.channel.ChanClosed):
-                    self._current_generation.function_ch.close()
-            else:
-                # 延迟 500ms 关闭，给 tee 两个 consumer 都足够的时间
-                gen_to_close = self._current_generation
-                loop = asyncio.get_event_loop()
-                loop.create_task(self._delayed_close_function_ch(gen_to_close))
+                    self._current_generation.message_ch.close()
+                if not has_function_call:
+                    with contextlib.suppress(utils.aio.channel.ChanClosed):
+                        self._current_generation.function_ch.close()
+                else:
+                    # 延迟 500ms 关闭，给 tee 两个 consumer 都足够的时间
+                    gen_to_close = self._current_generation
+                    loop = asyncio.get_event_loop()
+                    loop.create_task(self._delayed_close_function_ch(gen_to_close))
 
             if not has_function_call:
                 self._current_generation = None
