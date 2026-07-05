@@ -135,14 +135,14 @@ async def _join_and_chat(
 
     await room.connect(url, token.to_jwt())
     # 等 agent 加入
-    await asyncio.sleep(2.0)
+    await asyncio.sleep(8.0)
     await room.local_participant.send_text(prompt, topic="lk.chat")
 
     try:
         await asyncio.wait_for(reply_event.wait(), timeout=timeout)
     except asyncio.TimeoutError:
         pass
-    await asyncio.sleep(2.0)
+    await asyncio.sleep(8.0)
     await room.disconnect()
 
     # 检查 worker 日志：是否收到客户端消息
