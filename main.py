@@ -179,19 +179,21 @@ _VolcLLMStream._run = _patched_llm_run  # type: ignore[assignment]
 import logging as _logging  # noqa: E402
 from livekit.agents.ipc import proc_client as _proc_client  # noqa: E402
 
-_orig_init_logger = _proc_client._ProcClient.initialize_logger
+# livekit-agents 1.5+ 移除了 _ProcClient.initialize_logger（logger 初始化逻辑
+# 已经合并到 cli.setup_logging 路径）。这段 patch 是 1.2.9 时代的兼容代码，1.5+
+# 不需要再处理。
+if hasattr(_proc_client._ProcClient, "initialize_logger"):
+    _orig_init_logger = _proc_client._ProcClient.initialize_logger
 
+    def _patched_init_logger(self) -> None:  # type: ignore[no-untyped-def]
+        # 移除从主进程继承的所有 StreamHandler（保留其他 handler 类型）
+        root_logger = _logging.getLogger()
+        for h in list(root_logger.handlers):
+            if isinstance(h, _logging.StreamHandler):
+                root_logger.removeHandler(h)
+        _orig_init_logger(self)
 
-def _patched_init_logger(self) -> None:  # type: ignore[no-untyped-def]
-    # 移除从主进程继承的所有 StreamHandler（保留其他 handler 类型）
-    root_logger = _logging.getLogger()
-    for h in list(root_logger.handlers):
-        if isinstance(h, _logging.StreamHandler):
-            root_logger.removeHandler(h)
-    _orig_init_logger(self)
-
-
-_proc_client._ProcClient.initialize_logger = _patched_init_logger  # type: ignore[assignment]
+    _proc_client._ProcClient.initialize_logger = _patched_init_logger  # type: ignore[assignment]
 
 logger = logging.getLogger("volcengine-agent")
 
