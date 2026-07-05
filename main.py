@@ -47,13 +47,128 @@ logging.getLogger("livekit_api").setLevel(logging.WARNING)
 # 阻止 LiveKit 的 cli.log.setup_logging 在 start/dev 命令中再次添加 JSON handler，
 # 否则每条日志会打印两次（一次我们的格式，一次 JSON）。
 # 我们已经手动设置了 logging.basicConfig，所以让 setup_logging 什么都不做。
-# 注意：_run.py 用的是 `from .log import setup_logging`（局部导入），所以必须
-# 同时 monkey-patch 模块层和 _run 模块层才能生效。
+# 注意：livekit-agents 1.2.x 的 cli/_run.py 模块用 `from .log import setup_logging`
+# （局部导入），所以必须同时 monkey-patch 模块层和 _run 模块层才能生效。
+# livekit-agents 1.5.x 把 cli/_run.py 合并进了 cli/cli.py，_run 子模块已不存在，
+# 这里 try/except 兼容两种版本。
 from livekit.agents.cli import log as _cli_log  # noqa: E402
-from livekit.agents.cli import _run as _cli_run  # noqa: E402
 
 _cli_log.setup_logging = lambda *args, **kwargs: None  # type: ignore[assignment]
-_cli_run.setup_logging = lambda *args, **kwargs: None  # type: ignore[assignment]
+try:
+    # 1.2.x: cli/_run.py 是独立子模块，需要第二次 patch
+    from livekit.agents.cli import _run as _cli_run  # noqa: E402
+
+    _cli_run.setup_logging = lambda *args, **kwargs: None  # type: ignore[assignment]
+except ImportError:
+    # 1.5.x: cli/_run.py 已合并进 cli/cli.py，setup_logging 只剩一个入口
+    pass
+
+# vendored livekit-plugins-volcengine 的 utils.to_fnc_ctx() 调用
+# ``ToolContext(fnc_ctx).parse_function_tools("openai")``，但这个方法是
+# livekit-agents 1.5.x 才加的；当前 venv 装的是 1.2.9（CLAUDE.md 提到的
+# 1.5.x 是 intent，但 venv 实际未升级）。如果不打这个 shim，pipeline 模式
+# 的 LLM._run() 会在 to_fnc_ctx 处抛 AttributeError，整个 STT→LLM→TTS 链路
+# 永远走不到 TTS。
+#
+# shim 用 inspect.signature() 反推每个 @function_tool 的参数类型，组装成
+# OpenAI 的 ChatCompletionToolParam 格式。仅支持 "openai"（volcengine.LLM
+# 是 OpenAI 兼容的，唯一调用方）。
+import inspect as _inspect  # noqa: E402
+
+from livekit.agents.llm import ToolContext as _ToolContext  # noqa: E402
+
+
+def _patched_parse_function_tools(self, fmt: str) -> list:
+    """1.5.x 的 ToolContext.parse_function_tools 的 1.2.9 兼容实现。
+
+    仅实现 volcengine.LLM 实际调用的 ``fmt="openai"`` 分支：把
+    ``self.function_tools`` 转成 ``[{"type": "function", "function": {name, description, parameters}}]``。
+    """
+    if fmt != "openai":
+        # volcengine.LLM 只用 "openai"；其他格式直接返回空，触发框架的
+        # "tool 不支持" 兜底（避免 AttributeError 把整个 LLM 调用搞挂）。
+        return []
+
+    result = []
+    for _name, tool in self.function_tools.items():
+        info = getattr(tool, "__livekit_tool_info", None)
+        if info is None:
+            continue
+        parameters = {"type": "object", "properties": {}, "required": []}
+        try:
+            sig = _inspect.signature(tool)
+            properties = {}
+            required = []
+            for pname, param in sig.parameters.items():
+                ann = param.annotation
+                if ann is _inspect.Parameter.empty or ann is str:
+                    ptype = "string"
+                elif ann is int:
+                    ptype = "integer"
+                elif ann is float:
+                    ptype = "number"
+                elif ann is bool:
+                    ptype = "boolean"
+                elif ann is list:
+                    ptype = "array"
+                elif ann is dict:
+                    ptype = "object"
+                else:
+                    ptype = "string"
+                properties[pname] = {"type": ptype}
+                if param.default is _inspect.Parameter.empty:
+                    required.append(pname)
+            if properties:
+                parameters = {"type": "object", "properties": properties, "required": required}
+        except (TypeError, ValueError):
+            # C 函数 / inspect 失败 → 保留默认空 schema（OpenAI 仍可接受）
+            pass
+        result.append({
+            "type": "function",
+            "function": {
+                "name": info.name,
+                "description": info.description or "",
+                "parameters": parameters,
+            },
+        })
+    return result
+
+
+# 已经在 1.5.x 上时不需要这个 shim（已经原生有 parse_function_tools）
+if not hasattr(_ToolContext, "parse_function_tools"):
+    _ToolContext.parse_function_tools = _patched_parse_function_tools  # type: ignore[attr-defined]
+
+# 把 volcengine.LLM 每轮 assistant 文本作为 [LLM-TEXT] 标记打日志，
+# 方便 E2E 测试和事后排查用 grep 抓关键词。volcengine 插件默认 INFO 级别只
+# 打 llm start / llm first response / llm end 这种事件，不打实际文本。
+# patch 思路：wrap LLMStream._parse_choice 抓 delta.content，run 结束后
+# 一次性把累积文本打到 volcengine-agent logger。
+from livekit.plugins.volcengine.llm import LLMStream as _VolcLLMStream  # noqa: E402
+
+_orig_llm_run = _VolcLLMStream._run
+
+
+async def _patched_llm_run(self) -> None:  # type: ignore[no-untyped-def]
+    _orig_parse = self._parse_choice
+    text_parts: list[str] = []
+
+    def _wrapped_parse(chunk_id, choice):
+        delta = getattr(choice, "delta", None)
+        if delta is not None and getattr(delta, "content", None):
+            text_parts.append(delta.content)
+        return _orig_parse(chunk_id, choice)
+
+    self._parse_choice = _wrapped_parse  # type: ignore[method-assign]
+    try:
+        await _orig_llm_run(self)
+    finally:
+        self._parse_choice = _orig_parse  # type: ignore[method-assign]
+        full_text = "".join(text_parts).strip()
+        if full_text:
+            logger.info(f"[LLM-TEXT] {full_text}")
+
+
+_VolcLLMStream._run = _patched_llm_run  # type: ignore[assignment]
 
 # 阻止子进程的 root logger 同时走 IPC 和 stdout（造成每条日志重复输出）。
 # LiveKit fork 出子进程后，proc_client.initialize_logger() 会把 root logger
@@ -146,12 +261,19 @@ class VolcengineAgent(Agent):
         # 把 self.session 暴露给 build_agent() 的 session_provider
         _session_holder[0] = self.session
 
-        # 不在此调用 self.session.generate_reply(...)：vendor 插件的
-        # RealtimeSession.generate_reply 是占位实现（vendor/.../realtime.py:824），
-        # 5 秒后必抛 RealtimeError，会让框架关闭 session，导致客户端被踢。
-        # 进房主动打招呼改由 RealtimeModel 的 opening= 参数在 vendor 的
-        # _run_ws 启动路径里主动发 hello_request（vendor/.../realtime.py:457）。
-        logger.info("[Agent] 小语进入房间，等待与用户交互")
+        # 主动打招呼的策略：
+        # - realtime 模式不在此调用 generate_reply(...)，因为 vendor 的
+        #   RealtimeSession.generate_reply 是占位实现
+        #   （vendor/.../realtime.py:824），5 秒后必抛 RealtimeError。
+        #   realtime 改由 RealtimeModel(opening=) 在 vendor WebSocket 层
+        #   主动发 hello_request（vendor/.../realtime.py:457）。
+        # - pipeline 模式是标准 chat-mode，generate_reply() 会触发 LLM 出
+        #   一句开场白并经 TTS 合成广播，让客户端进房就能听到招呼声。
+        if PIPELINE == "pipeline":
+            logger.info("[Agent] (pipeline) 主动打招呼")
+            await self.session.generate_reply()
+        else:
+            logger.info("[Agent] 小语进入房间，等待与用户交互")
 
 
 # ---------------------------------------------------------------------------
