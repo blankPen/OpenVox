@@ -49,6 +49,7 @@ class TaskRecord:
     exit_code: int | None = None
     continuations: list[str] = field(default_factory=list)
     archive_seq: int = 0  # 续接序号（每次续接后 +1；archive/v<N>/ 用这个 N）
+    cwd: str = ""  # claude 子进程的 cwd（用户指定时填绝对路径；空 = 默认仓库根）
 
 
 def _tasks_root(workspace_root: Path) -> Path:
@@ -104,6 +105,7 @@ def load_task(workspace_root: Path, task_id: str) -> TaskRecord | None:
         exit_code=data.get("exit_code"),
         continuations=data.get("continuations", []),
         archive_seq=data.get("archive_seq", 0),
+        cwd=data.get("cwd", ""),
     )
 
 
@@ -180,8 +182,13 @@ async def _run_claude_subprocess(
     prompt: str,
     add_dir: Path,
     resume: bool = False,
+    exec_cwd: Path | None = None,
 ) -> tuple[int, str]:
     """启动 claude --print 子进程；写 output.md / stderr.log。
+
+    Args:
+        exec_cwd: 子进程的工作目录。None = 用 add_dir（默认仓库根）。
+                  用户指定的 cwd 让 claude 在某个具体项目目录调研。
 
     Returns:
         (exit_code, final_task_id) —— final_task_id 在 CLI 分配真实 sessionId 后
@@ -211,6 +218,7 @@ async def _run_claude_subprocess(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        cwd=str(exec_cwd) if exec_cwd else None,
     )
     stdout, stderr = await proc.communicate()
     exit_code = proc.returncode if proc.returncode is not None else -1
@@ -395,10 +403,30 @@ async def _summarize(workspace_root: Path, task_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def start_task(workspace_root: Path, prompt: str) -> tuple[TaskRecord | None, str]:
-    """创建任务、起后台协程；返回 (rec or None, error_msg)。"""
+def start_task(
+    workspace_root: Path,
+    prompt: str,
+    cwd: str = "",
+) -> tuple[TaskRecord | None, str]:
+    """创建任务、起后台协程；返回 (rec or None, error_msg)。
+
+    Args:
+        workspace_root: runner 自身管理的 workspace 目录
+        prompt: 调研内容
+        cwd: 调研执行的目录（claude 子进程的 cwd）。
+              空字符串 = 用 runner 默认目录（workspace 的父目录 = 仓库根）。
+              必须是已存在的绝对路径。
+    """
     if not _claude_exists():
         return None, "claude CLI 未安装"
+
+    # cwd 校验
+    if cwd:
+        cwd_path = Path(cwd).expanduser().resolve()
+        if not cwd_path.is_dir():
+            return None, f"指定的目录 {cwd_path} 不存在或不是目录"
+    else:
+        cwd_path = None
 
     # 并发上限拦截（AGENTS.md 要求 ≤ 3）
     active = count_active_tasks(workspace_root)
@@ -420,17 +448,18 @@ def start_task(workspace_root: Path, prompt: str) -> tuple[TaskRecord | None, st
         prompt=prompt,
         status=STATUS_CREATED,
         started_at=time.time(),
+        cwd=str(cwd_path) if cwd_path else "",
     )
     save_task(workspace_root, rec)
 
-    add_dir = workspace_root.parent  # 仓库根 = workspace 的父
+    # claude --add-dir 始终是仓库根（workspace 的父）；cwd 是子进程 cwd
+    add_dir = workspace_root.parent
 
     async def _runner() -> None:
         try:
             exit_code, final_id = await _run_claude_subprocess(
-                workspace_root, task_id, prompt, add_dir,
+                workspace_root, task_id, prompt, add_dir, exec_cwd=cwd_path,
             )
-            # 用 final_id（CLI 分配的真实 sessionId，迁移后）做后续操作
             await _summarize(workspace_root, final_id)
             _archive_old_outputs_on_completion(workspace_root, final_id)
         except Exception as e:
@@ -466,11 +495,14 @@ def continue_task(workspace_root: Path, task_id: str, prompt: str) -> tuple[Task
     update_status(workspace_root, task_id, status=STATUS_RUNNING)
 
     add_dir = workspace_root.parent
+    rec_for_cwd = load_task(workspace_root, task_id)
+    continue_cwd = Path(rec_for_cwd.cwd) if rec_for_cwd and rec_for_cwd.cwd else None
 
     async def _runner() -> None:
         try:
             exit_code, final_id = await _run_claude_subprocess(
-                workspace_root, task_id, prompt, add_dir, resume=True,
+                workspace_root, task_id, prompt, add_dir,
+                resume=True, exec_cwd=continue_cwd,
             )
             await _summarize(workspace_root, final_id)
             _archive_old_outputs_on_completion(workspace_root, final_id)
@@ -517,13 +549,14 @@ def list_tasks(
     status_filter: str = "",
     include_history: bool = False,
     project_cwd: str | None = None,
+    limit: int | None = None,
 ) -> list[TaskRecord]:
     """列出任务，按 started_at 倒序。
 
     数据源（合并去重）：
     1. .agent-tasks/<task_id>/ —— runner 管理的任务（带 status/summary.md）
     2. ~/.claude/history.jsonl —— Claude Code 全局历史（display + sessionId）
-       可选按 project 字段过滤（project_cwd），空 = 不过滤。
+       按 sessionId 分组取最新一条；可选按 project_cwd 过滤。
 
     Args:
         status_filter: 可选状态过滤（running/ready/failed/...）。
@@ -531,6 +564,7 @@ def list_tasks(
         include_history: True = 合并 ~/.claude/history.jsonl；False = 只看 runner
         project_cwd: 过滤 history.jsonl 里 project 字段等于此值的会话。
                      None 或空 = 不过滤。
+        limit: 返回上限。None = 全返回；正整数 = 取前 N 条（已排序）。
     """
     out: dict[str, TaskRecord] = {}
 
@@ -547,7 +581,7 @@ def list_tasks(
                 continue
             out[rec.id] = rec
 
-    # 源 2: ~/.claude/history.jsonl —— 真实 Claude Code 历史会话
+    # 源 2: ~/.claude/history.jsonl —— 真实 Claude Code 历史会话（按 sessionId 分组）
     if include_history:
         for hist_rec in _read_history_jsonl(project_cwd):
             # runner 管理的优先级高（带完整 status/summary）
@@ -557,18 +591,23 @@ def list_tasks(
 
     result = list(out.values())
     result.sort(key=lambda r: r.started_at, reverse=True)
+    if limit is not None and limit > 0:
+        result = result[:limit]
     return result
 
 
 def _read_history_jsonl(project_cwd: str | None) -> list[TaskRecord]:
     """解析 ~/.claude/history.jsonl，过滤出当前项目的会话。
 
+    **按 sessionId 分组**：同一个 sessionId 多条 entry 只保留时间戳最新的那条
+    （--resume 续接会 push 新 display，按用户最后一条意图展示）。
+
     每行 JSON: {display, pastedContents, timestamp, project, sessionId}
     """
     history_path = Path.home() / ".claude" / "history.jsonl"
     if not history_path.is_file():
         return []
-    out: list[TaskRecord] = []
+    grouped: dict[str, TaskRecord] = {}
     try:
         with history_path.open("r", encoding="utf-8") as f:
             for line in f:
@@ -587,16 +626,19 @@ def _read_history_jsonl(project_cwd: str | None) -> list[TaskRecord]:
                     continue
                 if project_cwd and project != project_cwd:
                     continue
-                # 转成 TaskRecord（status 用 "history" 占位以区分 runner 的状态）
-                out.append(TaskRecord(
-                    id=session_id,
-                    prompt=display or "(empty)",
-                    status="history",  # 来自 history.jsonl，没法知道当前是否在跑
-                    started_at=timestamp_ms / 1000.0,
-                ))
+                started_at = timestamp_ms / 1000.0
+                # 同 sessionId 多条 → 取时间戳最大的
+                existing = grouped.get(session_id)
+                if existing is None or started_at > existing.started_at:
+                    grouped[session_id] = TaskRecord(
+                        id=session_id,
+                        prompt=display or "(empty)",
+                        status="history",
+                        started_at=started_at,
+                    )
     except (OSError, json.JSONDecodeError) as e:
         logger.warning("[claude_task] read history.jsonl failed: %r", e)
-    return out
+    return list(grouped.values())
 
 
 def count_active_tasks(workspace_root: Path) -> int:

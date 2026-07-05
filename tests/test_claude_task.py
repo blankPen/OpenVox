@@ -262,3 +262,91 @@ def test_register_returns_four_tools() -> None:
     assert "claude_task_list" in names
     assert "claude_task_status" in names
     assert "claude_task_continue" in names
+
+
+# ---------------------------------------------------------------------------
+# cwd 参数（tool 层）
+# ---------------------------------------------------------------------------
+
+
+def test_create_with_cwd_passes_through(fake_workspace: Path, monkeypatch, tmp_path) -> None:
+    """cwd 参数透传到 runner.start_task 并写入 task.json。"""
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda x: "/usr/local/bin/claude")
+
+    class FakeLoop:
+        def create_task(self, coro):
+            coro.close()
+            return None
+    monkeypatch.setattr(asyncio, "get_running_loop", lambda: FakeLoop())
+
+    target = tmp_path / "project_x"
+    target.mkdir()
+    from extensions.tools.claude_task import claude_task_create
+    result = _run(claude_task_create("调研 Y", cwd=str(target)))
+    assert "调研任务已开起" in result
+    assert str(target.resolve()) in result  # cwd 注脚
+
+
+def test_create_invalid_cwd_returns_error(fake_workspace: Path, monkeypatch, tmp_path) -> None:
+    """cwd 不存在时返回 [ERROR]。"""
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda x: "/usr/local/bin/claude")
+    from extensions.tools.claude_task import claude_task_create
+    result = _run(claude_task_create("p", cwd="/no/such/dir/xyz"))
+    assert "[ERROR]" in result
+    assert "不存在" in result
+
+
+# ---------------------------------------------------------------------------
+# list limit 参数（tool 层）
+# ---------------------------------------------------------------------------
+
+
+def test_list_default_limit_is_10(fake_workspace: Path, monkeypatch) -> None:
+    """默认 limit=10。"""
+    from pathlib import Path as _Path
+    from extensions.tools.claude_task import claude_task_list
+
+    fake_home = fake_workspace / "fake_home"
+    fake_home.mkdir()
+    (fake_home / ".claude").mkdir()
+    (fake_home / ".claude" / "history.jsonl").write_text(
+        "\n".join(
+            f'{{"sessionId":"s{i:03d}","display":"x{i}","timestamp":{i},"project":"/p"}}'
+            for i in range(30)
+        ) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(_Path, "home", staticmethod(lambda: fake_home))
+    monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: _Path("/p")))
+
+    result = _run(claude_task_list("all"))
+    # 应该恰好返回 10 行（第 1 到第 10 个）
+    lines = [l for l in result.split("\n") if l.strip()]
+    assert len(lines) == 10
+    assert "第 1 个" in lines[0]
+    assert "第 10 个" in lines[-1]
+
+
+def test_list_explicit_limit(fake_workspace: Path, monkeypatch) -> None:
+    """limit=N 指定条数。"""
+    from pathlib import Path as _Path
+    from extensions.tools.claude_task import claude_task_list
+
+    fake_home = fake_workspace / "fake_home"
+    fake_home.mkdir()
+    (fake_home / ".claude").mkdir()
+    (fake_home / ".claude" / "history.jsonl").write_text(
+        "\n".join(
+            f'{{"sessionId":"s{i:03d}","display":"x{i}","timestamp":{i},"project":"/p"}}'
+            for i in range(20)
+        ) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(_Path, "home", staticmethod(lambda: fake_home))
+    monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: _Path("/p")))
+
+    result = _run(claude_task_list("all", limit=5))
+    lines = [l for l in result.split("\n") if l.strip()]
+    assert len(lines) == 5

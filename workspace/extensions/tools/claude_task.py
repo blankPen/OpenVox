@@ -91,7 +91,7 @@ def _resolve_task_ref(workspace: Path, task_ref: str, scope: str = "runner") -> 
 
 
 @function_tool()
-async def claude_task_create(prompt: str) -> str:
+async def claude_task_create(prompt: str, cwd: str = "") -> str:
     """启动一个后台 Claude Code 调研任务。
 
     适用于：调研、深度分析、多步操作、跨多小时工作。
@@ -100,10 +100,13 @@ async def claude_task_create(prompt: str) -> str:
 
     Args:
         prompt: 完整的调研/任务描述。
+        cwd: 调研执行目录（绝对路径）。空 = 默认 worker cwd（仓库根）。
+              例: "/Users/pz/workspace/my-app" —— 让 Claude 在该项目下调研。
+              续接时会自动沿用首次指定的 cwd。
 
     Returns:
-        口语化确认："已开起任务，方向是《XXX 前 N 字》"
-        "[ERROR] ..." —— CLI 缺失 / prompt 空 / 并发上限
+        口语化确认: "调研任务已开起，方向是《XXX》"
+        "[ERROR] ..." —— CLI 缺失 / prompt 空 / 并发上限 / 目录不存在
     """
     from claude_task_runner import start_task
 
@@ -111,15 +114,16 @@ async def claude_task_create(prompt: str) -> str:
         return "[ERROR] 调研内容不能为空"
 
     workspace = _workspace_root()
-    rec, err = start_task(workspace, prompt.strip())
+    rec, err = start_task(workspace, prompt.strip(), cwd=cwd.strip() or "")
     if err:
         logger.warning("[claude_task] CREATE_FAILED prompt=%r err=%r", prompt[:80], err)
         return f"[ERROR] {err}"
     logger.info(
-        "[claude_task] CREATED task_id=%s prompt=%r dir=%s",
-        rec.id, prompt[:80], workspace / ".agent-tasks" / rec.id,
+        "[claude_task] CREATED task_id=%s prompt=%r cwd=%s dir=%s",
+        rec.id, prompt[:80], rec.cwd, workspace / ".agent-tasks" / rec.id,
     )
-    return f"调研任务已开起，方向是《{prompt.strip()[:30]}》。跑完了我告诉你。"
+    cwd_note = f"（在 {rec.cwd} 下调研）" if rec.cwd else ""
+    return f"调研任务已开起，方向是《{prompt.strip()[:30]}》{cwd_note}。跑完了我告诉你。"
 
 
 # ---------------------------------------------------------------------------
@@ -128,13 +132,16 @@ async def claude_task_create(prompt: str) -> str:
 
 
 @function_tool()
-async def claude_task_list(scope: str = "all") -> str:
-    """列出所有任务（按时间倒序，最新在前），给用户口语化描述。
+async def claude_task_list(scope: str = "all", limit: int = 10) -> str:
+    """列出最近的会话（按时间倒序，最新在前），给用户口语化描述。
 
     数据源：合并 (1) runner 管理的任务（带状态/summary）+ (2) ~/.claude/history.jsonl 真实历史。
+    **按 sessionId 分组**：history.jsonl 同 sessionId 多条 entry 只算一条（取最新）。
+    默认返回最近 10 条；想看更多传 limit=N。
 
     Args:
-        scope: "all"（默认, 全部） | "runner"（只看 runner） | "history"（只看历史）。
+        scope: "all"（默认, runner + history） | "runner"（只看 runner） | "history"（只看历史）。
+        limit: 返回条数上限，默认 10。0 或负数 = 全部。
 
     Returns:
         口语化列表，每行一条：
@@ -150,8 +157,12 @@ async def claude_task_list(scope: str = "all") -> str:
         workspace,
         include_history=include_history,
         project_cwd=project_cwd,
+        limit=limit if limit > 0 else None,
     )
-    logger.info("[claude_task] LIST scope=%s count=%d", scope, len(records))
+    logger.info(
+        "[claude_task] LIST scope=%s limit=%s count=%d",
+        scope, limit, len(records),
+    )
 
     if not records:
         return "当前没有调研任务"

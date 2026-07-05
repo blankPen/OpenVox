@@ -348,6 +348,167 @@ def test_concurrency_limit_allows_when_below(tmp_path: Path, monkeypatch) -> Non
     assert rec is not None
 
 
+# ---------------------------------------------------------------------------
+# cwd 参数
+# ---------------------------------------------------------------------------
+
+
+def test_start_task_cwd_persisted(tmp_path: Path, monkeypatch) -> None:
+    """start_task(prompt, cwd=...) 把 cwd 写进 task.json。"""
+    from claude_task_runner import start_task, load_task
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda x: "/usr/local/bin/claude")
+
+    class FakeLoop:
+        def create_task(self, coro):
+            coro.close()
+            return None
+    monkeypatch.setattr(asyncio, "get_running_loop", lambda: FakeLoop())
+
+    target_dir = tmp_path / "research_target"
+    target_dir.mkdir()
+    rec, err = start_task(tmp_path, "调研 Y", cwd=str(target_dir))
+    assert err == ""
+    loaded = load_task(tmp_path, rec.id)
+    assert loaded is not None
+    assert loaded.cwd == str(target_dir.resolve())
+
+
+def test_start_task_cwd_invalid_dir_returns_error(tmp_path: Path, monkeypatch) -> None:
+    """cwd 不存在时返回错误。"""
+    from claude_task_runner import start_task
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda x: "/usr/local/bin/claude")
+
+    rec, err = start_task(tmp_path, "调研 Z", cwd="/nonexistent/dir/zzz")
+    assert rec is None
+    assert "不存在" in err or "不是目录" in err
+
+
+def test_start_task_cwd_empty_means_default(tmp_path: Path, monkeypatch) -> None:
+    """cwd="" 不存 cwd 字段（默认仓库根）。"""
+    from claude_task_runner import start_task, load_task
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda x: "/usr/local/bin/claude")
+
+    class FakeLoop:
+        def create_task(self, coro):
+            coro.close()
+            return None
+    monkeypatch.setattr(asyncio, "get_running_loop", lambda: FakeLoop())
+
+    rec, err = start_task(tmp_path, "p", cwd="")
+    assert err == ""
+    loaded = load_task(tmp_path, rec.id)
+    assert loaded.cwd == ""
+
+
+# ---------------------------------------------------------------------------
+# list 按 sessionId 分组 + limit
+# ---------------------------------------------------------------------------
+
+
+def test_list_groups_by_session_id(tmp_path: Path, monkeypatch) -> None:
+    """history 同 sessionId 多条 → 只算一条（取时间戳最大的）。"""
+    from pathlib import Path as _Path
+    from claude_task_runner import list_tasks
+
+    fake_home = tmp_path / "fake_home"
+    fake_home.mkdir()
+    (fake_home / ".claude").mkdir()
+    (fake_home / ".claude" / "history.jsonl").write_text(
+        '{"sessionId":"s1","display":"first prompt","timestamp":100,"project":"/p"}\n'
+        '{"sessionId":"s1","display":"second prompt (resumed)","timestamp":200,"project":"/p"}\n'
+        '{"sessionId":"s1","display":"third prompt","timestamp":300,"project":"/p"}\n'
+        '{"sessionId":"s2","display":"other session","timestamp":150,"project":"/p"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(_Path, "home", staticmethod(lambda: fake_home))
+
+    records = list_tasks(tmp_path, include_history=True, project_cwd="/p")
+    # s1 出现 3 次但只算 1 条，s2 算 1 条 → 共 2 条
+    assert len(records) == 2
+    # s1 取 timestamp 最大的（第 3 条 = "third prompt"）
+    s1 = next(r for r in records if r.id == "s1")
+    assert s1.prompt == "third prompt"
+    assert s1.started_at == 300.0 / 1000.0  # 0.3
+    # 按 started_at 倒序 → s1 (300) 在前
+    assert records[0].id == "s1"
+
+
+def test_list_limit_caps_results(tmp_path: Path, monkeypatch) -> None:
+    """limit=N 只返回前 N 条。"""
+    from pathlib import Path as _Path
+    from claude_task_runner import list_tasks
+
+    fake_home = tmp_path / "fake_home"
+    fake_home.mkdir()
+    (fake_home / ".claude").mkdir()
+    (fake_home / ".claude" / "history.jsonl").write_text(
+        "\n".join(
+            f'{{"sessionId":"s{i:03d}","display":"session {i}","timestamp":{i*1000},"project":"/p"}}'
+            for i in range(20)
+        ) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(_Path, "home", staticmethod(lambda: fake_home))
+
+    records = list_tasks(tmp_path, include_history=True, project_cwd="/p", limit=10)
+    assert len(records) == 10
+    # 按时间倒序，最新的在前
+    assert records[0].id == "s019"
+    assert records[-1].id == "s010"
+
+
+def test_list_limit_zero_means_no_limit(tmp_path: Path, monkeypatch) -> None:
+    """limit=0 或 None → 全部返回。"""
+    from pathlib import Path as _Path
+    from claude_task_runner import list_tasks
+
+    fake_home = tmp_path / "fake_home"
+    fake_home.mkdir()
+    (fake_home / ".claude").mkdir()
+    (fake_home / ".claude" / "history.jsonl").write_text(
+        "\n".join(
+            f'{{"sessionId":"s{i:03d}","display":"x","timestamp":{i},"project":"/p"}}'
+            for i in range(5)
+        ) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(_Path, "home", staticmethod(lambda: fake_home))
+
+    assert len(list_tasks(tmp_path, include_history=True, project_cwd="/p", limit=0)) == 5
+    assert len(list_tasks(tmp_path, include_history=True, project_cwd="/p", limit=None)) == 5
+
+
+def test_taskrecord_cwd_field_roundtrip(tmp_path: Path) -> None:
+    """TaskRecord.cwd 字段保存 / 读取一致。"""
+    from claude_task_runner import save_task, load_task, TaskRecord, STATUS_READY
+    rec = TaskRecord(
+        id="a1b2-uuid", prompt="p", status=STATUS_READY, started_at=1.0,
+        cwd="/some/abs/path",
+    )
+    save_task(tmp_path, rec)
+    loaded = load_task(tmp_path, "a1b2-uuid")
+    assert loaded is not None
+    assert loaded.cwd == "/some/abs/path"
+
+
+def test_taskrecord_cwd_defaults_to_empty(tmp_path: Path) -> None:
+    """旧 task.json 没有 cwd 字段 → load_task 返回 cwd=""。"""
+    from claude_task_runner import save_task, load_task, TaskRecord, STATUS_READY
+    # 不带 cwd 字段，手写一个老格式 task.json
+    import json as _json
+    task_dir = tmp_path / ".agent-tasks" / "old01uuid"
+    task_dir.mkdir(parents=True)
+    (task_dir / "task.json").write_text(_json.dumps({
+        "id": "old01uuid", "prompt": "p", "status": "ready", "started_at": 1.0,
+    }), encoding="utf-8")
+    loaded = load_task(tmp_path, "old01uuid")
+    assert loaded is not None
+    assert loaded.cwd == ""  # 兼容旧数据
+
+
 def test_all_statuses_contains_expected() -> None:
     for s in (STATUS_CREATED, STATUS_RUNNING, STATUS_SUMMARIZING, STATUS_READY, STATUS_FAILED):
         assert s in ALL_STATUSES
