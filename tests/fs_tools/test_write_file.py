@@ -97,16 +97,22 @@ def test_write_file_write_op_warning_logged(tmp_path, caplog):
     assert "WRITE_OP" in caplog.text
 
 
-# ---- 权限（macOS 跳过）----
+# ---- 权限拒绝（用 monkeypatch 模拟，不依赖真实 chmod）----
 
-@pytest.mark.skipif(sys.platform == "darwin", reason="macOS 忽略 chmod 0o000")
-def test_write_file_permission_denied(tmp_path):
-    from workspace.extensions.tools.fs.write_file import write_file
-    no_write = tmp_path / "no_write.txt"
-    no_write.write_text("existing")
-    no_write.chmod(0o444)
-    try:
-        result = _run(write_file(str(no_write), "new content"))
-        assert not result.startswith("[OK]") or no_write.read_text(encoding="utf-8") == "new content"
-    finally:
-        no_write.chmod(0o644)
+def test_write_file_permission_denied(tmp_path, monkeypatch):
+    """用 monkeypatch 模拟 PermissionError，避免依赖真实 chmod（macOS 失效）。"""
+    from workspace.extensions.tools.fs import write_file as wf_mod
+    target = tmp_path / "no_write.txt"
+    target.write_text("existing")
+
+    # Patch os.write 抛 PermissionError（原子写路径里调 os.write）
+    import os as _os
+    real_open = _os.open
+
+    def _raise_open(*args, **kwargs):
+        raise PermissionError(13, "Permission denied", str(target))
+
+    monkeypatch.setattr(_os, "open", _raise_open)
+
+    result = _run(wf_mod.write_file(str(target), "new content"))
+    assert result.startswith("[ERROR]")

@@ -83,17 +83,20 @@ def test_read_file_is_directory(tmp_path):
     assert "目录" in result
 
 
-@pytest.mark.skipif(sys.platform == "darwin", reason="macOS 忽略 chmod 0o000")
-def test_read_file_permission_denied(tmp_path):
-    from workspace.extensions.tools.fs.read_file import read_file
-    no_read = tmp_path / "no_read.txt"
-    no_read.write_text("secret")
-    no_read.chmod(0o000)
-    try:
-        result = _run(read_file(str(no_read)))
-        assert result.startswith("[ERROR]")
-    finally:
-        no_read.chmod(0o644)
+def test_read_file_permission_denied(tmp_path, monkeypatch):
+    """用 monkeypatch 模拟 PermissionError，避免依赖真实 chmod（macOS 失效）。"""
+    from workspace.extensions.tools.fs import read_file as rf_mod
+    target = tmp_path / "secret.txt"
+    target.write_text("x")
+
+    def _raise(*args, **kwargs):
+        raise PermissionError(13, "Permission denied", str(target))
+
+    monkeypatch.setattr(rf_mod.Path, "read_text", _raise)
+
+    result = _run(rf_mod.read_file(str(target)))
+    assert result.startswith("[ERROR]")
+    assert "Permission" in result or "permission" in result or "无权" in result
 
 
 def test_read_file_big_file_truncated(tmp_path):
