@@ -191,11 +191,40 @@ if not hasattr(_llm_utils, "_PATCHED_FAPM"):
     _llm_utils.function_arguments_to_pydantic_model = _patched_fapm  # type: ignore[assignment]
     _llm_utils._PATCHED_FAPM = True  # type: ignore[attr-defined]
 
-# 把 volcengine.LLM 每轮 assistant 文本作为 [LLM-TEXT] 标记打日志，
-# 方便 E2E 测试和事后排查用 grep 抓关键词。volcengine 插件默认 INFO 级别只
-# 打 llm start / llm first response / llm end 这种事件，不打实际文本。
-# patch 思路：wrap LLMStream._parse_choice 抓 delta.content，run 结束后
-# 一次性把累积文本打到 volcengine-agent logger。
+# pipeline 模式中文语音日志（用户说了什么 + AI 回复了什么）：
+# - STT 最终识别结果 → [用户语音] 标签（本节 patch）
+# - LLM 每轮 assistant 文本 → [AI回复] 标签（下方 LLMStream patch）
+#
+# STT 的 _process_stream_event 在 FINAL_TRANSCRIPT 时把识别文本塞在
+# logger.info(..., extra={"text": text}) 里，但 logging.basicConfig 的
+# %(message)s 不会展开 extra 字段，导致控制台看不到用户说了什么。
+# patch 思路：wrap _process_stream_event，原方法跑完后若为最终结果就记日志。
+from livekit.plugins.volcengine.stt import SpeechStream as _VolcSTTSpeechStream, parse_response as _stt_parse_response  # noqa: E402
+
+_orig_stt_process = _VolcSTTSpeechStream._process_stream_event
+
+
+def _patched_stt_process(self, data: dict) -> None:
+    _orig_stt_process(self, data)
+    # 从已解析的响应中提取最终识别文本（仅在 definite=True 时才是最终结果）
+    try:
+        payload = _stt_parse_response(data).get("payload_msg", {})
+        result = payload.get("result", None)
+        if result is None:
+            return
+        text = result.get("text", "")
+        utterances = result.get("utterances", [])
+        if text and utterances and utterances[0].get("definite", False):
+            logger.info(f"[用户语音] {text}")
+    except Exception:
+        pass  # 日志不应该影响主流程
+
+
+_VolcSTTSpeechStream._process_stream_event = _patched_stt_process  # type: ignore[assignment]
+
+# volcengine 插件默认 INFO 级别只打 llm start / llm first response / llm end
+# 这种事件，不打实际文本。patch 思路：wrap LLMStream._parse_choice 抓
+# delta.content，run 结束后一次性把累积文本打到 volcengine-agent logger。
 from livekit.plugins.volcengine.llm import LLMStream as _VolcLLMStream  # noqa: E402
 
 _orig_llm_run = _VolcLLMStream._run
@@ -222,7 +251,7 @@ async def _patched_llm_run(self) -> None:  # type: ignore[no-untyped-def]
         self._parse_choice = _orig_parse  # type: ignore[method-assign]
         full_text = "".join(text_parts).strip()
         if full_text:
-            logger.info(f"[LLM-TEXT] {full_text}")
+            logger.info(f"[AI回复] {full_text}")
 
 
 _VolcLLMStream._run = _patched_llm_run  # type: ignore[assignment]
