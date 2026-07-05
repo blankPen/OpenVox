@@ -66,10 +66,10 @@ def test_claude_task_create_returns_natural_language(fake_workspace: Path, monke
 # ---------------------------------------------------------------------------
 
 
-def test_claude_task_list_empty(fake_workspace: Path) -> None:
-    """空时返回 '当前没有调研任务'。"""
+def test_claude_task_list_empty_runner_only(fake_workspace: Path) -> None:
+    """scope='runner' 且无 runner 任务时返回 '当前没有调研任务'。"""
     from extensions.tools.claude_task import claude_task_list
-    result = _run(claude_task_list())
+    result = _run(claude_task_list("runner"))
     assert "当前没有调研任务" in result
 
 
