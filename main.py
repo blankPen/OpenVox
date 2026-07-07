@@ -84,27 +84,6 @@ _VolcSTTSpeechStream._process_stream_event = _patched_stt_process  # type: ignor
 
 logger = logging.getLogger("volcengine-agent")
 
-# ---------------------------------------------------------------------------
-# Agent extensibility 资源根
-# ---------------------------------------------------------------------------
-# workspace/ 是 agent 的"家目录"：persona/skills/extensions/users/sandbox 都放这里。
-# 把 workspace/ 加到 sys.path 顶，让 agent_persona / agent_skills / agent_extensions
-# / agent_memory 这些模块可以直接 import。
-import sys as _sys
-from pathlib import Path as _Path
-
-WORKSPACE_ROOT = _Path(__file__).parent / "workspace"
-if str(WORKSPACE_ROOT) not in _sys.path:
-    _sys.path.insert(0, str(WORKSPACE_ROOT))
-
-# 让 claude_task 工具在子进程也能找到 workspace 根（不需要再走 sys.path 推断）
-os.environ.setdefault("AGENT_WORKSPACE_ROOT", str(WORKSPACE_ROOT))
-
-# load_skill() 工具需要拿到当前 session 才能调 update_chat_ctx。
-# 用模块级 holder 共享：build_agent() 写入 closure 读，on_enter() 写入 holder。
-# （v0.1 简化实现；v0.2 改成把 session_provider 注入到 agent 实例属性）
-_session_holder: list[AgentSession | None] = [None]
-
 # 当前仅支持 PIPELINE="pipeline"：
 #   火山引擎 STT/TTS + 指向 Hermes api_server 的 openai.LLM
 # 历史的多 PIPELINE 分支已合并清理，仅保留 pipeline 一种。
@@ -126,8 +105,6 @@ class VolcengineAgent(Agent):
         self,
         *,
         instructions: str | None = None,
-        tools: list | None = None,
-        mcp_servers: list | None = None,
     ) -> None:
         super().__init__(
             instructions=instructions or (
@@ -135,14 +112,9 @@ class VolcengineAgent(Agent):
                 "请用简洁、自然的口吻回答用户的问题，"
                 "避免使用表情符号、Markdown 或特殊符号。"
             ),
-            tools=tools or [],
-            mcp_servers=mcp_servers or [],
         )
 
     async def on_enter(self) -> None:
-        # 把 self.session 暴露给 build_agent() 的 session_provider
-        _session_holder[0] = self.session
-
         # 主动打招呼的策略：当前仅 pipeline 模式 — generate_reply() 触发 LLM 出
         # 一句开场白并经 TTS 合成广播，让客户端进房就能听到招呼声。
         if PIPELINE == "pipeline":
@@ -221,56 +193,6 @@ def _build_session() -> AgentSession:
 # ---------------------------------------------------------------------------
 
 
-# ---------------------------------------------------------------------------
-# Agent 工厂 — 从 workspace/ 装配 VolcengineAgent
-# ---------------------------------------------------------------------------
-
-
-def build_agent(workspace_root: _Path) -> Agent:
-    """Assemble a VolcengineAgent from the 4 workspace modules.
-
-    Called per-dispatch in entrypoint() with the real workspace root.
-    Order: persona → skills registry → mcp servers → tools → load_skill.
-    """
-    from agent_persona import load_persona
-    from agent_skills import scan_skills, make_load_skill_tool
-    from agent_extensions import load_tools, load_mcp_servers
-
-    persona = load_persona(workspace_root)
-    skills_registry = scan_skills(workspace_root / "skills")
-    mcp_servers = load_mcp_servers(workspace_root / "extensions" / "mcp")
-    tools = load_tools(workspace_root / "extensions" / "tools")
-
-    # load_skill 需要 session → 用模块级 _session_holder 跟 on_enter 共享
-    def session_provider() -> AgentSession:
-        assert _session_holder[0] is not None, "load_skill called before session started"
-        return _session_holder[0]
-
-    load_skill = make_load_skill_tool(skills_registry, session_provider)
-    tools.append(load_skill)
-
-    # 摘要：列清楚每类资源各加载了什么
-    from agent_extensions import _tool_name  # type: ignore[attr-defined]
-    tool_names = [_tool_name(t) for t in tools]
-    skill_names = sorted(skills_registry)
-    mcp_names = [
-        getattr(s, "command", None) or getattr(s, "url", "?")
-        for s in mcp_servers
-    ]
-    logger.info("=" * 60)
-    logger.info(f"[Agent] build_agent summary for {workspace_root}:")
-    logger.info(f"[Agent]   persona  : {len(persona.combined)}c system prompt")
-    logger.info(f"[Agent]   skills   : {len(skills_registry)} → {skill_names}")
-    logger.info(f"[Agent]   mcp      : {len(mcp_servers)} → {mcp_names}")
-    logger.info(f"[Agent]   tools    : {len(tools)} → {tool_names}")
-    logger.info("=" * 60)
-    return VolcengineAgent(
-        instructions=persona.combined,
-        tools=tools,
-        mcp_servers=mcp_servers,
-    )
-
-
 async def entrypoint(ctx: JobContext) -> None:
     """LiveKit worker 启动后由调度器调用的主入口函数。"""
     logger.info(f"[Worker] 收到任务，正在加入房间: {ctx.room.name} (pipeline={PIPELINE})")
@@ -279,7 +201,7 @@ async def entrypoint(ctx: JobContext) -> None:
     # room_input_options 传给 session.start()（livekit-agents 1.5+ 也可在 __init__ 中传入）
 
     await session.start(
-        agent=build_agent(WORKSPACE_ROOT),
+        agent=VolcengineAgent(),
         room=ctx.room,
         room_input_options=RoomInputOptions(
             text_input_cb=_custom_text_input_cb,
@@ -321,24 +243,6 @@ async def entrypoint(ctx: JobContext) -> None:
         return
     os.environ["_OPENCZ_USER_ID"] = user_id
     logger.info(f"[Worker] user_id={user_id}")
-
-    # 注入 per-user 长期记忆（connect + 拿到 user_id 之后）
-    from agent_memory import MemoryStore
-    user_dir = WORKSPACE_ROOT / "users" / user_id
-    memory = MemoryStore(user_dir)
-    recall = memory.load_user_prompt()
-    if recall:
-        try:
-            session.current_agent.update_chat_ctx(messages=[
-                {"role": "system", "content": recall}
-            ])
-            # 摘要在 build_agent 那行已经打了，这里只标 [Memory]
-            logger.info(
-                f"[Memory] injected user={user_id} {len(recall)}c into chat ctx "
-                f"(from {user_dir})"
-            )
-        except Exception as e:
-            logger.warning(f"[Memory] 注入失败: {e}")
 
 
 if __name__ == "__main__":
