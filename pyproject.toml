@@ -1,5 +1,17 @@
+[project]
+name = "livekit-volcengine-worker"
+version = "0.1.0"
+description = "LiveKit Agents worker with Volcengine STT/TTS + Hermes OpenAI-compatible LLM"
+requires-python = ">=3.10"
+dependencies = [
+    "livekit-agents[otel,silero,turn-detector]~=1.5",
+    "livekit-plugins-volcengine",
+    "livekit-plugins-openai==1.6.4",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
+pythonpath = ["."]  # 让 tests/ 下的 import 找到 main.py 和 hermes_bridge/

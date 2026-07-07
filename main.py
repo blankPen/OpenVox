@@ -26,7 +26,7 @@ from livekit.agents import (
     cli,
 )
 from livekit.agents.voice.room_io import RoomInputOptions, TextInputEvent
-from livekit.plugins import qwen, volcengine
+from livekit.plugins import volcengine, openai
 
 # 从 .env 文件中加载环境变量，覆盖当前进程环境。仅在开发和本地运行时使用。
 load_dotenv()
@@ -51,14 +51,14 @@ from livekit.agents.cli import log as _cli_log  # noqa: E402
 
 _cli_log.setup_logging = lambda *args, **kwargs: None  # type: ignore[assignment]
 
-# pipeline 模式中文语音日志（用户说了什么 + AI 回复了什么）：
-# - STT 最终识别结果 → [用户语音] 标签（本节 patch）
-# - LLM 每轮 assistant 文本 → [AI回复] 标签（下方 LLMStream patch）
+# pipeline 模式中文语音日志：STT 最终识别结果 → [用户语音] 标签。
 #
 # STT 的 _process_stream_event 在 FINAL_TRANSCRIPT 时把识别文本塞在
 # logger.info(..., extra={"text": text}) 里，但 logging.basicConfig 的
 # %(message)s 不会展开 extra 字段，导致控制台看不到用户说了什么。
 # patch 思路：wrap _process_stream_event，原方法跑完后若为最终结果就记日志。
+# LLM 文本日志：openai.LLM 走标准 OpenAI 流式 chunk，控制台可直接看见，
+# 不再需要自定义 patch。
 from livekit.plugins.volcengine.stt import SpeechStream as _VolcSTTSpeechStream, parse_response as _stt_parse_response  # noqa: E402
 
 _orig_stt_process = _VolcSTTSpeechStream._process_stream_event
@@ -81,40 +81,6 @@ def _patched_stt_process(self, data: dict) -> None:
 
 
 _VolcSTTSpeechStream._process_stream_event = _patched_stt_process  # type: ignore[assignment]
-
-# volcengine 插件默认 INFO 级别只打 llm start / llm first response / llm end
-# 这种事件，不打实际文本。patch 思路：wrap LLMStream._parse_choice 抓
-# delta.content，run 结束后一次性把累积文本打到 volcengine-agent logger。
-from livekit.plugins.volcengine.llm import LLMStream as _VolcLLMStream  # noqa: E402
-
-_orig_llm_run = _VolcLLMStream._run
-
-
-async def _patched_llm_run(self) -> None:  # type: ignore[no-untyped-def]
-    _orig_parse = self._parse_choice
-    text_parts: list[str] = []
-
-    def _wrapped_parse(chunk_id, choice):
-        delta = getattr(choice, "delta", None)
-        if delta is not None:
-            content = getattr(delta, "content", None)
-            # 只累积字符串 content。LLM 有时会把 delta.content 设为 []（空 list）
-            # 而非 None，过滤掉以免 "".join() 产生字面 "[]"。
-            if isinstance(content, str) and content:
-                text_parts.append(content)
-        return _orig_parse(chunk_id, choice)
-
-    self._parse_choice = _wrapped_parse  # type: ignore[method-assign]
-    try:
-        await _orig_llm_run(self)
-    finally:
-        self._parse_choice = _orig_parse  # type: ignore[method-assign]
-        full_text = "".join(text_parts).strip()
-        if full_text:
-            logger.info(f"[AI回复] {full_text}")
-
-
-_VolcLLMStream._run = _patched_llm_run  # type: ignore[assignment]
 
 logger = logging.getLogger("volcengine-agent")
 
@@ -139,23 +105,10 @@ os.environ.setdefault("AGENT_WORKSPACE_ROOT", str(WORKSPACE_ROOT))
 # （v0.1 简化实现；v0.2 改成把 session_provider 注入到 agent 实例属性）
 _session_holder: list[AgentSession | None] = [None]
 
-# 默认使用 realtime 模式，可通过 PIPELINE 切换：
-#   "realtime"        → Volcengine 端到端语音
-#   "pipeline"        → Volcengine STT/LLM/TTS 分离
-#   "qwen-realtime"   → 千问 Qwen3.5-Omni 端到端语音（原生 function calling）
-PIPELINE = os.environ.get("PIPELINE", "realtime")
-
-
-def _bool_env(name: str, default: bool) -> bool:
-    """将环境变量解析为布尔值。
-
-    支持的真值字符串包括："1"、"true"、"yes"、"on"。
-    其它值会被视为 False。如果变量未设置，则返回默认值。
-    """
-    val = os.environ.get(name)
-    if val is None:
-        return default
-    return val.strip().lower() in ("1", "true", "yes", "on")
+# 当前仅支持 PIPELINE="pipeline"：
+#   火山引擎 STT/TTS + 指向 Hermes api_server 的 openai.LLM
+# 历史的多 PIPELINE 分支已合并清理，仅保留 pipeline 一种。
+PIPELINE = os.environ.get("PIPELINE", "pipeline")
 
 
 # ---------------------------------------------------------------------------
@@ -190,17 +143,11 @@ class VolcengineAgent(Agent):
         # 把 self.session 暴露给 build_agent() 的 session_provider
         _session_holder[0] = self.session
 
-        # 主动打招呼的策略：
-        # - realtime / qwen-realtime 模式不在此调用 generate_reply(...)，
-        #   因为 realtime 模型有自己的 opening 机制（volcengine 通过 hello_request，
-        #   千问通过 response.create 触发开场白）。
-        # - pipeline 模式是标准 chat-mode，generate_reply() 会触发 LLM 出
-        #   一句开场白并经 TTS 合成广播，让客户端进房就能听到招呼声。
+        # 主动打招呼的策略：当前仅 pipeline 模式 — generate_reply() 触发 LLM 出
+        # 一句开场白并经 TTS 合成广播，让客户端进房就能听到招呼声。
         if PIPELINE == "pipeline":
             logger.info("[Agent] (pipeline) 主动打招呼")
             await self.session.generate_reply()
-        elif PIPELINE == "qwen-realtime":
-            logger.info("[Agent] 小语(Qwen)进入房间，等待与用户交互")
         else:
             logger.info("[Agent] 小语进入房间，等待与用户交互")
 
@@ -223,7 +170,7 @@ def _custom_text_input_cb(sess: AgentSession, ev: TextInputEvent) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 会话构建工厂 — 根据 PIPELINE 选择 Realtime 或 分离 STT/LLM/TTS
+# 会话构建工厂 — 唯一支持的 PIPELINE="pipeline"
 # ---------------------------------------------------------------------------
 
 
@@ -237,55 +184,34 @@ def _prewarm(proc) -> AgentSession:
 
 
 def _build_session() -> AgentSession:
-    """根据当前 PIPELINE 配置构建 AgentSession。"""
-    if PIPELINE == "pipeline":
-        # Volcengine STT + LLM + TTS 分离管线
-        return AgentSession(
-            stt=volcengine.STT(
-                app_id=os.environ["VOLCENGINE_STT_APP_ID"],
-                access_token=os.environ["VOLCENGINE_STT_ACCESS_TOKEN"],
-            ),
-            llm=volcengine.LLM(
-                model="doubao-1-5-pro-32k-250115",
-                api_key=os.environ["VOLCENGINE_LLM_API_KEY"],
-            ),
-            tts=volcengine.TTS(
-                app_id=os.environ["VOLCENGINE_TTS_APP_ID"],
-                access_token=os.environ["VOLCENGINE_TTS_ACCESS_TOKEN"],
-            ),
+    """构建 ``AgentSession``。
+
+    当前唯一支持的 PIPELINE 是 ``"pipeline"`` —— 火山引擎 STT/TTS 配
+    指向 Hermes api_server 的 ``openai.LLM``。Hermes gateway 自带
+    OpenAI 兼容 HTTP server（端口 8642），不需要本地桥接服务。
+
+    历史的多 PIPELINE 分支已合并清理；要扩展新管线请直接在
+    ``if PIPELINE != "pipeline"`` 处加 ValueError 之外的入口。
+    """
+    if PIPELINE != "pipeline":
+        raise ValueError(
+            f"Unsupported PIPELINE={PIPELINE!r}; only 'pipeline' is supported"
         )
 
-    if PIPELINE == "qwen-realtime":
-        # Qwen3.5-Omni 端到端实时语音 — 原生支持 function calling。
-        # semantic_vad 可过滤无意义语音，与 function calling 配合更自然。
-        model = os.environ.get("QWEN_MODEL", "qwen3.5-omni-plus-realtime")
-        voice = os.environ.get("QWEN_VOICE", "Tina")
-        opening = os.environ.get("QWEN_OPENING") or "你好啊，今天过得怎么样？"
-        logger.info(f"[Qwen] building session: model={model} voice={voice}")
-        return AgentSession(
-            llm=qwen.RealtimeModel(
-                model=model,
-                voice=voice,
-                opening=opening,
-                turn_detection_type="semantic_vad",
-            ),
-        )
-
-    # Volcengine Realtime 端到端语音 — 不支持 function calling。
-    # opening= 让 vendor 插件在 ws 连接就绪后自动发一句 hello_request，
-    # 实现"进入房间主动打招呼"的效果。
-    # 可选的联网搜索功能依赖独立的 Volcengine AI 联网搜索产品，
-    # 需要在控制台中激活并把 API Key 填入 VOLCENGINE_WEBSEARCH_API_KEY。
+    # 火山引擎 STT + 指向 Hermes api_server 的 OpenAI 兼容 LLM + 火山 TTS
     return AgentSession(
-        llm=volcengine.RealtimeModel(
-            app_id=os.environ["VOLCENGINE_REALTIME_APP_ID"],
-            access_token=os.environ["VOLCENGINE_REALTIME_ACCESS_TOKEN"],
-            bot_name="小语",
-            model="O",
-            opening="你好啊，今天过得怎么样？",
-            enable_volc_websearch=_bool_env("VOLCENGINE_ENABLE_WEBSEARCH", False),
-            volc_websearch_api_key=os.environ.get("VOLCENGINE_WEBSEARCH_API_KEY") or None,
-            volc_websearch_no_result_message="我再想想怎么回答你。",
+        stt=volcengine.STT(
+            app_id=os.environ["VOLCENGINE_STT_APP_ID"],
+            access_token=os.environ["VOLCENGINE_STT_ACCESS_TOKEN"],
+        ),
+        llm=openai.LLM(
+            model=os.environ.get("HERMES_BRIDGE_MODEL", "hermes-agent"),
+            api_key=os.environ["HERMES_BRIDGE_API_KEY"],
+            base_url=os.environ["HERMES_BRIDGE_BASE_URL"],
+        ),
+        tts=volcengine.TTS(
+            app_id=os.environ["VOLCENGINE_TTS_APP_ID"],
+            access_token=os.environ["VOLCENGINE_TTS_ACCESS_TOKEN"],
         ),
     )
 
