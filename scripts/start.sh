@@ -24,15 +24,24 @@ else
     exit 1
 fi
 
-# 加载 .env
-if [ -f .env ]; then
-    set -a
-    source .env
-    set +a
-else
-    echo "ERROR: .env not found in $REPO_ROOT"
+# 配置入口：~/.openz/config.json（路径可用 OPENZ_CONFIG 环境变量覆盖）。
+# main.py 在 import 时就读，缺关键 key 会 ConfigError 早抛。这里只做
+# 一次性的存在性 / 语法检查，让启动脚本能先报而不是要等 worker 起来后
+# 在日志里才看到 import error。
+CONFIG_PATH="${OPENZ_CONFIG:-$HOME/.openz/config.json}"
+CONFIG_PATH="${CONFIG_PATH/#\~/$HOME}"  # 展开开头的 ~
+if [ ! -f "$CONFIG_PATH" ]; then
+    echo "ERROR: config not found: $CONFIG_PATH"
+    echo "       main.py 不再读本地 .env；请创建 ~/.openz/config.json（schema 见 config.py）。"
     exit 1
 fi
+if ! "$PY" -c "import json,sys; json.load(open(sys.argv[1]))" "$CONFIG_PATH" 2>/dev/null; then
+    echo "ERROR: config 解析失败: $CONFIG_PATH"
+    exit 1
+fi
+
+# 从 config 抽 AGENT_NAME 仅用于展示（main.py 自己会读）
+AGENT_NAME=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['livekit']['agent_name'])" "$CONFIG_PATH" 2>/dev/null || echo "<unknown>")
 
 ACTION="${1:-start}"
 WORKER_PORT="${WORKER_PORT:-8081}"
