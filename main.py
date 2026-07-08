@@ -177,9 +177,12 @@ def _build_session() -> AgentSession:
             access_token=os.environ["VOLCENGINE_STT_ACCESS_TOKEN"],
         ),
         llm=openai.LLM(
-            model=os.environ.get("HERMES_BRIDGE_MODEL", "hermes-agent"),
-            api_key=os.environ["HERMES_BRIDGE_API_KEY"],
-            base_url=os.environ["HERMES_BRIDGE_BASE_URL"],
+            base_url=os.environ["BRIDGE_BASE_URL"],
+            api_key=os.environ["BRIDGE_API_KEY"],
+            extra_headers={
+                "X-LiveKit-Room": os.environ["LIVEKIT_ROOM_NAME"],
+                "X-LiveKit-User": os.environ.get("_OPENCZ_USER_ID", ""),
+            },
         ),
         tts=volcengine.TTS(
             app_id=os.environ["VOLCENGINE_TTS_APP_ID"],
