@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+.env
 .env.local
 
 # Agent extensibility runtime data

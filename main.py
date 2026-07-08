@@ -1,8 +1,10 @@
 """LiveKit Agent 与 Volcengine（火山引擎）语音服务集成的入口。
 
-当前唯一支持的运行模式是 PIPELINE=pipeline：火山引擎 STT + LLM（经本地 bridge 打到
-Hermes api_server）+ 火山引擎 TTS。需要的环境变量见 .env。
-程序启动时会从 ``.env`` 加载环境变量，方便本地开发和部署。
+当前唯一支持的运行模式是 PIPELINE=pipeline：火山引擎 STT + LLM（经本地
+bridge 打到 Hermes api_server）+ 火山引擎 TTS。
+
+配置从 ``~/.openz/config.json`` 读取（schema 见 config.py 模块头注释）。路径
+可通过 OPENZ_CONFIG 环境变量覆盖，主要供测试使用。模块导入即读一次。
 """
 
 from __future__ import annotations
@@ -11,7 +13,7 @@ import logging
 import os
 import sys
 
-from dotenv import load_dotenv
+from config import get_config
 
 # ───────── Hermes 兼容补丁 ─────────
 # livekit-plugins-openai 的 inference/llm.py:432 写的是
@@ -72,8 +74,7 @@ from livekit.agents import (
 from livekit.agents.voice.room_io import RoomInputOptions, TextInputEvent
 from livekit.plugins import volcengine, openai
 
-# 从 .env 文件中加载环境变量，覆盖当前进程环境。仅在开发和本地运行时使用。
-load_dotenv()
+_cfg = get_config()
 
 # 配置日志输出到 stdout，便于在控制台观察完整对话过程。
 # 日志格式：时间 | 级别 | logger 名 | 消息
@@ -128,10 +129,9 @@ _VolcSTTSpeechStream._process_stream_event = _patched_stt_process  # type: ignor
 
 logger = logging.getLogger("volcengine-agent")
 
-# 当前仅支持 PIPELINE="pipeline"：
-#   火山引擎 STT/TTS + 指向 Hermes api_server 的 openai.LLM
-# 历史的多 PIPELINE 分支已合并清理，仅保留 pipeline 一种。
-PIPELINE = os.environ.get("PIPELINE", "pipeline")
+# 当前唯一支持的 PIPELINE 值是 "pipeline"。读 config 而非环境变量；多分支
+# 历史已合并清理，要扩展新管线直接在 _build_session 入口加 ValueError 之外的分支。
+PIPELINE: str = _cfg.require("pipeline")
 
 
 # ---------------------------------------------------------------------------
@@ -203,36 +203,37 @@ def _build_session() -> AgentSession:
     """构建 ``AgentSession``。
 
     当前唯一支持的 PIPELINE 是 ``"pipeline"`` —— 火山引擎 STT/TTS 配
-    ``openai.LLM``。LLM 通过 ``BRIDGE_BASE_URL``（默认 :8765）打到
+    ``openai.LLM``。LLM 通过 ``bridge.base_url``（默认 :8765）打到
     ``scripts/bridge_server.py``，bridge 再透传到 Hermes gateway 自带的
-    OpenAI 兼容 api_server（:8642，``HERMES_API_BASE``）。
-
-    历史的多 PIPELINE 分支已合并清理；要扩展新管线请直接在
-    ``if PIPELINE != "pipeline"`` 处加 ValueError 之外的入口。
+    OpenAI 兼容 api_server（:8642，``hermes.api_base``）。
     """
     if PIPELINE != "pipeline":
         raise ValueError(
             f"Unsupported PIPELINE={PIPELINE!r}; only 'pipeline' is supported"
         )
 
-    # 火山引擎 STT + 指向 Hermes api_server 的 OpenAI 兼容 LLM + 火山 TTS
+    # _OPENCZ_USER_ID 是 entrypoint() 在远端参与者 join 时写进 os.environ 的
+    # 运行时状态，不是 config；build_session() 在 worker 启动早期就可能被
+    # 调一次（_prewarm），此时 user_id 为空，符合预期。
+    user_id = os.environ.get("_OPENCZ_USER_ID", "")
+
     return AgentSession(
         stt=volcengine.STT(
-            app_id=os.environ["VOLCENGINE_STT_APP_ID"],
-            access_token=os.environ["VOLCENGINE_STT_ACCESS_TOKEN"],
+            app_id=_cfg.require("volcengine.stt.app_id"),
+            access_token=_cfg.require("volcengine.stt.access_token"),
         ),
         llm=openai.LLM(
-            model=os.environ["BRIDGE_MODEL"],
-            base_url=os.environ["BRIDGE_BASE_URL"],
-            api_key=os.environ["BRIDGE_API_KEY"],
+            model=_cfg.require("bridge.model"),
+            base_url=_cfg.require("bridge.base_url"),
+            api_key=_cfg.require("bridge.api_key"),
             extra_headers={
-                "X-LiveKit-Room": os.environ["LIVEKIT_ROOM_NAME"],
-                "X-LiveKit-User": os.environ.get("_OPENCZ_USER_ID", ""),
+                "X-LiveKit-Room": _cfg.require("bridge.livekit_room_name"),
+                "X-LiveKit-User": user_id,
             },
         ),
         tts=volcengine.TTS(
-            app_id=os.environ["VOLCENGINE_TTS_APP_ID"],
-            access_token=os.environ["VOLCENGINE_TTS_ACCESS_TOKEN"],
+            app_id=_cfg.require("volcengine.tts.app_id"),
+            access_token=_cfg.require("volcengine.tts.access_token"),
         ),
     )
 
@@ -290,6 +291,8 @@ async def entrypoint(ctx: JobContext) -> None:
     except asyncio.TimeoutError:
         logger.warning("[Worker] 20s 内无远端参与者")
         return
+    # _OPENCZ_USER_ID 是 session 级运行时状态而非 config——后续 LLM 调用会
+    # 通过 os.environ["_OPENCZ_USER_ID"] 读到。再次 build_session() 才能拿到。
     os.environ["_OPENCZ_USER_ID"] = user_id
     logger.info(f"[Worker] user_id={user_id}")
 
@@ -303,10 +306,6 @@ if __name__ == "__main__":
             # 这里仅返回构建好的会话对象即可。
             prewarm_fnc=_prewarm,
             # 明确指定 agent_name，方便 LiveKit Dispatch API 定向本 worker。
-            # 如果需要部署多个不同 pipeline 的 worker，可通过环境变量
-            # AGENT_NAME 覆盖该默认值。
-            agent_name=os.environ.get("AGENT_NAME", "volcengine-agent"),
+            agent_name=_cfg.require("livekit.agent_name"),
         )
     )
-
-

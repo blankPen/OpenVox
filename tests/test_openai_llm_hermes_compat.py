@@ -11,11 +11,12 @@ main.py 在模块顶部装了一个 monkey-patch，把 None-choices 的块在到
 1. 单元：_FilterNoneChoices 自身能正确丢 None-choices 块
 2. 集成：构造 main.openai.LLM，mock openai SDK 让它 yield None-choices chunk，
    调 chat() 必须不抛 TypeError 且有效 chunk 透传。
+
+main._cfg 用 fake Config 注入，避免依赖 ~/.openz/config.json。
 """
 from __future__ import annotations
 
 import asyncio
-import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -89,8 +90,6 @@ def _make_none_choices_chunk() -> ChatCompletionChunk:
 
 def test_filter_drops_none_choices_chunks():
     """_FilterNoneChoices 必须跳过 choices=None 的块，保留其他。"""
-    import sys
-    sys.path.insert(0, "/Users/pz/workspace/livekit/.claude/worktrees/fix-hermes-bridge-docs")
     from main import _FilterNoneChoices
 
     good1 = _make_valid_chunk("first")
@@ -108,8 +107,6 @@ def test_filter_drops_none_choices_chunks():
 
 def test_filter_aclose_propagates():
     """_FilterNoneChoices.aclose 必须调到 inner 的 aclose。"""
-    import sys
-    sys.path.insert(0, "/Users/pz/workspace/livekit/.claude/worktrees/fix-hermes-bridge-docs")
     from main import _FilterNoneChoices
 
     inner = _FakeStream([])
@@ -120,12 +117,11 @@ def test_filter_aclose_propagates():
 
 def test_filter_is_patched_on_openai_sdk():
     """导入 main 必须把 openai.AsyncCompletions.create 替换成 _safe_create。"""
-    import sys
     # 重新加载保证拿到最新 patch
+    import sys
     for mod in list(sys.modules):
         if mod == "main" or mod.startswith("openai"):
             del sys.modules[mod]
-    sys.path.insert(0, "/Users/pz/workspace/livekit/.claude/worktrees/fix-hermes-bridge-docs")
     import main  # noqa: F401
     from openai.resources.chat.completions import AsyncCompletions
     assert AsyncCompletions.create is main._safe_create, (
@@ -136,21 +132,33 @@ def test_filter_is_patched_on_openai_sdk():
 # ───────── 集成测试 ─────────
 
 
+def _make_fake_config() -> "Config":
+    from config import Config
+    return Config({
+        "pipeline": "pipeline",
+        "volcengine": {
+            "stt": {"app_id": "stt-id", "access_token": "stt-token"},
+            "tts": {"app_id": "tts-id", "access_token": "tts-token"},
+        },
+        "livekit": {"agent_name": "test-agent"},
+        "bridge": {
+            "base_url": "http://127.0.0.1:9999/v1",
+            "api_key": "test-key",
+            "model": "test-model",
+            "livekit_room_name": "test-room",
+        },
+    })
+
+
 @pytest.fixture
-def pipeline_env(monkeypatch):
-    """main._build_session() 需要的所有环境变量。"""
-    monkeypatch.setenv("PIPELINE", "pipeline")
-    monkeypatch.setenv("BRIDGE_MODEL", "test-model")
-    monkeypatch.setenv("BRIDGE_API_KEY", "test-key")
-    monkeypatch.setenv("BRIDGE_BASE_URL", "http://test/v1")
-    monkeypatch.setenv("LIVEKIT_ROOM_NAME", "test-room")
-    monkeypatch.setenv("VOLCENGINE_STT_APP_ID", "stt-id")
-    monkeypatch.setenv("VOLCENGINE_STT_ACCESS_TOKEN", "stt-token")
-    monkeypatch.setenv("VOLCENGINE_TTS_APP_ID", "tts-id")
-    monkeypatch.setenv("VOLCENGINE_TTS_ACCESS_TOKEN", "tts-token")
+def fake_config(monkeypatch):
+    """注入 fake Config 到 main，绕开 ~/.openz/config.json。"""
+    import main
+    monkeypatch.setattr(main, "_cfg", _make_fake_config())
+    return main._cfg
 
 
-def test_llm_chat_survives_none_choices_chunk(pipeline_env, monkeypatch):
+def test_llm_chat_survives_none_choices_chunk(fake_config, monkeypatch):
     """mock openai SDK 让它 yield None-choices chunk → livekit chat() 必须不抛。
 
     测试构造：
@@ -160,11 +168,6 @@ def test_llm_chat_survives_none_choices_chunk(pipeline_env, monkeypatch):
     - 调 llm.chat()，期望 _safe_create → _orig_create（被 mock） → 流过滤 →
       至少一个有效 ChatChunk 透传
     """
-    import sys
-    for mod in list(sys.modules):
-        if mod == "main" or mod.startswith("openai"):
-            del sys.modules[mod]
-    sys.path.insert(0, "/Users/pz/workspace/livekit/.claude/worktrees/fix-hermes-bridge-docs")
     import main
 
     bad_chunk = _make_none_choices_chunk()
@@ -175,7 +178,7 @@ def test_llm_chat_survives_none_choices_chunk(pipeline_env, monkeypatch):
     async def fake_orig_create(self, **kwargs):
         return fake_inner_stream
 
-    main._orig_create = fake_orig_create
+    monkeypatch.setattr(main, "_orig_create", fake_orig_create)
 
     from livekit.agents import llm as livekit_llm
 

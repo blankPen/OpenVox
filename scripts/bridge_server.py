@@ -15,26 +15,37 @@ Endpoints:
 
 import json
 import logging
-import os
+import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+# scripts/ 目录不在 pythonpath；手动加项目根以便 import config
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from config import get_config  # noqa: E402
+
 logger = logging.getLogger("bridge.server")
 
 # ──────────────────────────────────────────────────────────────────
-# Config (env-overridable; defaults match task spec)
+# Config (从 ~/.openz/config.json 读，schema 见 config.py 模块注释)
 # ──────────────────────────────────────────────────────────────────
-BRIDGE_HOST = os.environ.get("BRIDGE_HOST", "127.0.0.1")
-BRIDGE_PORT = int(os.environ.get("BRIDGE_PORT", "8765"))
-HERMES_API_BASE = os.environ.get("HERMES_API_BASE", "http://127.0.0.1:8080/v1")
-HERMES_API_KEY = os.environ.get("HERMES_API_KEY", "")
-BRIDGE_API_KEY = os.environ.get("BRIDGE_API_KEY", "bridge")
-DEFAULT_MODEL = os.environ.get("BRIDGE_MODEL", "hermes-agent")
-HTTP_TIMEOUT = float(os.environ.get("BRIDGE_HTTP_TIMEOUT", "60"))
+_cfg = get_config()
+
+BRIDGE_HOST: str = _cfg.require("bridge_server.host")
+BRIDGE_PORT: int = int(_cfg.require("bridge_server.port"))
+HERMES_API_BASE: str = _cfg.require("hermes.api_base")
+HERMES_API_KEY: str = _cfg.get("hermes.api_key", "")
+BRIDGE_API_KEY: str = _cfg.require("bridge.api_key")
+DEFAULT_MODEL: str = _cfg.require("bridge.model")
+HTTP_TIMEOUT: float = float(_cfg.require("bridge_server.http_timeout"))
+BRIDGE_LOG_LEVEL: str = _cfg.require("bridge_server.log_level")
 
 
 @asynccontextmanager
@@ -57,7 +68,7 @@ app = FastAPI(lifespan=lifespan, title="livekit-hermes-bridge")
 def _check_auth(request: Request) -> JSONResponse | None:
     """Optional auth: require X-API-Key or Authorization Bearer to match BRIDGE_API_KEY.
 
-    Set BRIDGE_API_KEY="" to disable auth (local dev only).
+    Set bridge.api_key="" to disable auth (local dev only).
     """
     if not BRIDGE_API_KEY:
         return None
@@ -177,6 +188,6 @@ if __name__ == "__main__":
         "bridge_server:app",
         host=BRIDGE_HOST,
         port=BRIDGE_PORT,
-        log_level=os.environ.get("BRIDGE_LOG_LEVEL", "info"),
+        log_level=BRIDGE_LOG_LEVEL,
         factory=False,
     )
