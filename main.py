@@ -1,12 +1,7 @@
 """LiveKit Agent 与 Volcengine（火山引擎）语音服务集成的入口。
 
-本模块支持两种运行模式，由环境变量 ``PIPELINE`` 选择：
-
-* ``"realtime"`` — 端到端语音模型，只需填写 ``VOLCENGINE_REALTIME_*``
-  相关凭据。
-* ``"pipeline"`` — 分离的 STT + LLM + TTS 模型 ，需要分别填写
-  三套凭据并额外提供 ``VOLCENGINE_LLM_API_KEY``。
-
+当前唯一支持的运行模式是 PIPELINE=pipeline：火山引擎 STT + LLM（经本地 bridge 打到
+Hermes api_server）+ 火山引擎 TTS。需要的环境变量见 .env。
 程序启动时会从 ``.env`` 加载环境变量，方便本地开发和部署。
 """
 
@@ -17,6 +12,55 @@ import os
 import sys
 
 from dotenv import load_dotenv
+
+# ───────── Hermes 兼容补丁 ─────────
+# livekit-plugins-openai 的 inference/llm.py:432 写的是
+#   for choice in chunk.choices:
+# 火山引擎 Hermes 网关在 stream_options.include_usage=True 时发的 usage-only
+# chunk 形如 {"choices": null, "usage": {...}}，触发 TypeError 把每次 LLM 调用
+# 尾巴炸掉。临时在 openai SDK 入口包一层流过滤器把这种块丢掉；上游修好后整段删。
+import openai as _openai_sdk
+from openai.resources.chat.completions import AsyncCompletions as _AsyncCompletions
+
+_orig_create = _AsyncCompletions.create
+
+
+class _FilterNoneChoices:
+    """透传 stream，但跳过 chunk.choices 为 None 的帧（Hermes usage-only 块）。"""
+
+    def __init__(self, inner: object) -> None:
+        self._inner = inner
+
+    def __aiter__(self) -> "_FilterNoneChoices":
+        return self
+
+    async def __anext__(self):
+        async for chunk in self._inner:
+            if chunk.choices is not None:
+                return chunk
+        raise StopAsyncIteration
+
+    async def aclose(self) -> None:
+        aclose = getattr(self._inner, "aclose", None)
+        if aclose is not None:
+            await aclose()
+
+    async def __aenter__(self) -> "_FilterNoneChoices":
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        await self.aclose()
+
+
+async def _safe_create(self, **kwargs):
+    inner = await _orig_create(self, **kwargs)
+    if kwargs.get("stream"):
+        return _FilterNoneChoices(inner)
+    return inner
+
+
+_AsyncCompletions.create = _safe_create
+# ───────── 补丁结束 ─────────
 
 from livekit.agents import (
     Agent,
@@ -159,8 +203,9 @@ def _build_session() -> AgentSession:
     """构建 ``AgentSession``。
 
     当前唯一支持的 PIPELINE 是 ``"pipeline"`` —— 火山引擎 STT/TTS 配
-    指向 Hermes api_server 的 ``openai.LLM``。Hermes gateway 自带
-    OpenAI 兼容 HTTP server（端口 8642），不需要本地桥接服务。
+    ``openai.LLM``。LLM 通过 ``BRIDGE_BASE_URL``（默认 :8765）打到
+    ``scripts/bridge_server.py``，bridge 再透传到 Hermes gateway 自带的
+    OpenAI 兼容 api_server（:8642，``HERMES_API_BASE``）。
 
     历史的多 PIPELINE 分支已合并清理；要扩展新管线请直接在
     ``if PIPELINE != "pipeline"`` 处加 ValueError 之外的入口。
@@ -177,6 +222,7 @@ def _build_session() -> AgentSession:
             access_token=os.environ["VOLCENGINE_STT_ACCESS_TOKEN"],
         ),
         llm=openai.LLM(
+            model=os.environ["BRIDGE_MODEL"],
             base_url=os.environ["BRIDGE_BASE_URL"],
             api_key=os.environ["BRIDGE_API_KEY"],
             extra_headers={

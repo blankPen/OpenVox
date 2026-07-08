@@ -1,10 +1,10 @@
-"""Bridge server: OpenAI-compatible proxy from :8765 to Hermes api_server :8080.
+"""Bridge server: OpenAI-compatible proxy from :8765 to Hermes api_server :8642.
 
 Adapted from ~/.hermes/skills/livekit-agent-bridge/references/bridge-server-template.md.
 
 LiveKit side: openai.LLM(base_url=http://127.0.0.1:8765/v1, api_key=BRIDGE_API_KEY,
 extra_headers={"X-LiveKit-Room": ..., "X-LiveKit-User": ...})
-Hermes side: Hermes gateway's OpenAI-compatible api_server (default :8080).
+Hermes side: Hermes gateway's OpenAI-compatible api_server (default :8642).
 
 Endpoints:
   GET  /health                 -> {"ok": true, ...}

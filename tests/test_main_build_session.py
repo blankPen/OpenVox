@@ -23,9 +23,9 @@ MAIN_PATH = Path(__file__).resolve().parents[1] / "main.py"
 def _set_pipeline_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Populate every env var ``_build_session`` reads under PIPELINE=pipeline."""
     monkeypatch.setenv("PIPELINE", "pipeline")
-    monkeypatch.setenv("HERMES_BRIDGE_MODEL", "test-model")
-    monkeypatch.setenv("HERMES_BRIDGE_API_KEY", "test-api-key")
-    monkeypatch.setenv("HERMES_BRIDGE_BASE_URL", "http://127.0.0.1:9999/v1")
+    monkeypatch.setenv("BRIDGE_MODEL", "test-model")
+    monkeypatch.setenv("BRIDGE_API_KEY", "test-api-key")
+    monkeypatch.setenv("BRIDGE_BASE_URL", "http://127.0.0.1:9999/v1")
     monkeypatch.setenv("VOLCENGINE_STT_APP_ID", "stt-app-id")
     monkeypatch.setenv("VOLCENGINE_STT_ACCESS_TOKEN", "stt-access-token")
     monkeypatch.setenv("VOLCENGINE_TTS_APP_ID", "tts-app-id")
