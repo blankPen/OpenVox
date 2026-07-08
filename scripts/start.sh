@@ -43,6 +43,15 @@ fi
 # 从 config 抽 AGENT_NAME 仅用于展示（main.py 自己会读）
 AGENT_NAME=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['livekit']['agent_name'])" "$CONFIG_PATH" 2>/dev/null || echo "<unknown>")
 
+# 把 LIVEKIT_* 导出到环境变量 — livekit-agents 的 worker.run() 走
+# os.environ['LIVEKIT_URL'] / ['LIVEKIT_API_KEY'] / ['LIVEKIT_API_SECRET']
+# 这条路径，main.py 自己用 config 读，但 LiveKit SDK 内部仍然期望 env。
+# 不破坏 main.py 的「配置走 config」原则，只在启动器这一层做适配。
+LIVEKIT_URL=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['livekit']['url'])" "$CONFIG_PATH")
+LIVEKIT_API_KEY=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['livekit']['api_key'])" "$CONFIG_PATH")
+LIVEKIT_API_SECRET=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['livekit']['api_secret'])" "$CONFIG_PATH")
+export LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET
+
 ACTION="${1:-start}"
 WORKER_PORT="${WORKER_PORT:-8081}"
 LOG="${WORKER_LOG:-/tmp/livekit-worker.log}"
