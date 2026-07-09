@@ -4,14 +4,11 @@ These tests assert the public contract of ``_build_session``:
 
 * pipeline 模式必须用 openai.LLM（指向 hermes api_server）
 * STT / TTS 仍是火山引擎
-* 未知 PIPELINE 必须抛 ValueError
 * qwen-realtime / volcengine.RealtimeModel 分支必须不存在
 * 配置从 ~/.openvox/config.json 读取（不再用 .env / 环境变量）
 """
 from __future__ import annotations
 
-import re
-import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -25,7 +22,6 @@ def _make_fake_config() -> "Config":  # type: ignore[name-defined]  # noqa: F821
     """Build a Config object with values the tests assert against."""
     from config import Config
     return Config({
-        "pipeline": "pipeline",
         "volcengine": {
             "stt": {"app_id": "stt-app-id", "access_token": "stt-access-token"},
             "tts": {"app_id": "tts-app-id", "access_token": "tts-access-token"},
@@ -93,19 +89,6 @@ def test_pipeline_uses_volcengine_stt_tts(fake_config):
     assert tts_kwargs["access_token"] == "tts-access-token", tts_kwargs
 
 
-def test_unknown_pipeline_raises(fake_config, monkeypatch):
-    """任何 PIPELINE != 'pipeline' 必须抛 ValueError。"""
-    import main
-    monkeypatch.setattr(main, "PIPELINE", "weird-thing")
-
-    with patch("livekit.plugins.openai.LLM"), \
-         patch("livekit.plugins.volcengine.STT"), \
-         patch("livekit.plugins.volcengine.TTS"), \
-         patch("main.AgentSession"):
-        with pytest.raises(ValueError, match=r"Unsupported PIPELINE"):
-            main._build_session()
-
-
 def test_qwen_realtime_branch_removed():
     """main.py 不能再 import 或引用 livekit.plugins.qwen。"""
     src = MAIN_PATH.read_text(encoding="utf-8")
@@ -116,16 +99,20 @@ def test_qwen_realtime_branch_removed():
 
 
 def test_volcengine_realtime_branch_removed():
-    """main.py 不能再构造 volcengine.RealtimeModel——realtime 端到端分支彻底移除。"""
+    """main.py 不能再引用 volcengine.RealtimeModel 或 RealtimeSession。
+
+    realtime 端到端模式已彻底从 OpenVox 中移除；vendored 插件里的
+    RealtimeModel/RealtimeSession 类仍在但本项目不应再 import 或构造。
+    """
     src = MAIN_PATH.read_text(encoding="utf-8")
     assert "RealtimeModel" not in src, (
         "main.py 仍引用 RealtimeModel — realtime 分支必须删除"
     )
-    # 兜底：唯一保留的分支必须只有一个 'pipeline' if
-    pipeline_ifs = len(re.findall(r'if PIPELINE\s*==\s*["\']pipeline["\']', src))
-    # 若用了 if PIPELINE != ... raise 的形态，再确认没有 else 分支兜底构造 RealtimeModel
-    assert pipeline_ifs >= 1, (
-        "main.py 必须保留至少一个对 PIPELINE=='pipeline' 的判断"
+    assert "RealtimeSession" not in src, (
+        "main.py 仍引用 RealtimeSession — realtime 分支必须删除"
+    )
+    assert "VOLCENGINE_REALTIME" not in src, (
+        "main.py 仍引用 VOLCENGINE_REALTIME_* 环境变量"
     )
 
 
@@ -134,3 +121,14 @@ def test_does_not_load_dotenv():
     src = MAIN_PATH.read_text(encoding="utf-8")
     assert "load_dotenv" not in src, "main.py 仍在调 load_dotenv"
     assert "dotenv" not in src, "main.py 仍 import 了 dotenv"
+
+
+def test_no_pipeline_module_constant():
+    """main.py 不应再有 ``PIPELINE`` 模块级常量 — pipeline 是唯一模式，没有切换开关。"""
+    src = MAIN_PATH.read_text(encoding="utf-8")
+    # 模块级赋值（仅看 ^ 缩进级别 0 的 PIPELINE = ... / PIPELINE: str = ...）
+    import re
+    top_level_pipeline = re.search(r"^PIPELINE\s*[:=]", src, re.MULTILINE)
+    assert top_level_pipeline is None, (
+        "main.py 仍有模块级 PIPELINE 常量 — pipeline 是唯一模式，无需切换开关"
+    )

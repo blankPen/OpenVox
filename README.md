@@ -2,7 +2,7 @@
 
 > **OpenVox** 是一个基于 LiveKit Agents 的语音 worker，对接火山引擎（Volcengine）的 STT / TTS，LLM 直连本地 Hermes OpenAI-兼容 api_server。把 `livekit-plugins-volcengine`（来自 [di-osc/livekit-plugins-chinese](https://github.com/di-osc/livekit-plugins-chinese/tree/main/livekit-plugins/livekit-plugins-volcengine)）挂在 LiveKit Server 上。
 >
-> 默认管线是 **Realtime E2E**（一条 WebSocket 直连火山引擎 dialogue 端点），也可一键切到 **STT+LLM+TTS pipeline**。
+> 默认管线是 **STT + LLM + TTS pipeline**（STT/TTS 走火山引擎，LLM 走 `openai.LLM` → Hermes api_server）。
 
 ---
 
@@ -107,7 +107,6 @@ lk dispatch create --dev --room demo --agent-name openz
 | `failed to connect to livekit, retrying in 0s ... WSServerHandshakeError 401` | LIVEKIT cred 错了 | 核对 `.env` 里 `LIVEKIT_API_KEY=devkey`、`LIVEKIT_API_SECRET=secret`、`LIVEKIT_URL=ws://localhost:7880` |
 | `lk dispatch create` 报 `agent-name is required` | worker 没设 agent_name | main.py 里 `WorkerOptions(agent_name=...)` 必需 |
 | `lk token create` 一直打印"failed to fetch" | URL 不对，或 server 没起 | `curl http://localhost:7880/` 看是否 200 |
-| Realtime 模型日志里 `Connection reset by peer` 一直重连 | 火山侧鉴权挂了 | 检查 `VOLCENGINE_REALTIME_APP_ID` / `_ACCESS_TOKEN`，确认 plugin 源码里的固定 `X-Api-App-Key: PlgvMymc7f3tQnJ6` 字段没被覆盖 |
 
 ---
 

@@ -1,7 +1,7 @@
 """LiveKit Agent 与 Volcengine（火山引擎）语音服务集成的入口。
 
-当前唯一支持的运行模式是 PIPELINE=pipeline：火山引擎 STT + LLM（经本地
-bridge 打到 Hermes api_server）+ 火山引擎 TTS。
+运行模式：STT + LLM + TTS pipeline 三段式。STT/TTS 走火山引擎，LLM 走
+``openai.LLM``（对接本地 Hermes OpenAI-兼容 api_server）。
 
 配置从 ``~/.openvox/config.json`` 读取（schema 见 config.py 模块头注释）。路径
 可通过 OPENVOX_CONFIG 环境变量覆盖，主要供测试使用。模块导入即读一次。
@@ -127,10 +127,6 @@ _VolcSTTSpeechStream._process_stream_event = _patched_stt_process  # type: ignor
 
 logger = logging.getLogger("openvox-agent")
 
-# 当前唯一支持的 PIPELINE 值是 "pipeline"。读 config 而非环境变量；多分支
-# 历史已合并清理，要扩展新管线直接在 _build_session 入口加 ValueError 之外的分支。
-PIPELINE: str = _cfg.require("pipeline")
-
 
 # ---------------------------------------------------------------------------
 # Agent 定义
@@ -157,13 +153,10 @@ class VolcengineAgent(Agent):
         )
 
     async def on_enter(self) -> None:
-        # 主动打招呼的策略：当前仅 pipeline 模式 — generate_reply() 触发 LLM 出
+        # 主动打招呼：generate_reply() 触发 LLM 出
         # 一句开场白并经 TTS 合成广播，让客户端进房就能听到招呼声。
-        if PIPELINE == "pipeline":
-            logger.info("[Agent] (pipeline) 主动打招呼")
-            await self.session.generate_reply()
-        else:
-            logger.info("[Agent] 小语进入房间，等待与用户交互")
+        logger.info("[Agent] 主动打招呼")
+        await self.session.generate_reply()
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +177,7 @@ def _custom_text_input_cb(sess: AgentSession, ev: TextInputEvent) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 会话构建工厂 — 唯一支持的 PIPELINE="pipeline"
+# 会话构建工厂 — pipeline (STT + LLM + TTS)
 # ---------------------------------------------------------------------------
 
 
@@ -200,15 +193,9 @@ def _prewarm(proc) -> AgentSession:
 def _build_session() -> AgentSession:
     """构建 ``AgentSession``。
 
-    当前唯一支持的 PIPELINE 是 ``"pipeline"`` —— 火山引擎 STT/TTS 配
-    ``openai.LLM``，直连 Hermes gateway 的 OpenAI 兼容 api_server（默认
-    :8642，``hermes.api_base``）。
+    STT/TTS 走火山引擎插件，LLM 走 ``openai.LLM`` 直连 Hermes gateway 的
+    OpenAI 兼容 api_server（默认 :8642，``hermes.api_base``）。
     """
-    if PIPELINE != "pipeline":
-        raise ValueError(
-            f"Unsupported PIPELINE={PIPELINE!r}; only 'pipeline' is supported"
-        )
-
     return AgentSession(
         stt=volcengine.STT(
             app_id=_cfg.require("volcengine.stt.app_id"),
@@ -233,7 +220,7 @@ def _build_session() -> AgentSession:
 
 async def entrypoint(ctx: JobContext) -> None:
     """LiveKit worker 启动后由调度器调用的主入口函数。"""
-    logger.info(f"[Worker] 收到任务，正在加入房间: {ctx.room.name} (pipeline={PIPELINE})")
+    logger.info(f"[Worker] 收到任务，正在加入房间: {ctx.room.name}")
 
     session = _build_session()
 

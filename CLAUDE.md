@@ -31,7 +31,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 对接本地 LiveKit 启动 worker | `./start.sh`（server 已起就 `python main.py start`） |
 | dev 派单模式 | `python main.py dev` |
 | 控制台模式（终端收发） | `python main.py console` |
-| 切到 STT+LLM+TTS 管线 | `PIPELINE=pipeline python main.py start`（默认 `realtime`） |
 | 冒烟测试插件导入 | `python -c "from livekit.plugins import volcengine; print(volcengine.__all__)"` |
 | 构建并跑容器化 worker | `docker compose build && docker compose up` |
 | 把 agent 派到房间 | `lk dispatch create --dev --room demo --agent-name openvox` |
@@ -44,21 +43,17 @@ vendored 插件一律用 keyword-only 参数。**不要**照搬 PyPI 上 `liveki
 
 | 组件 | 火山引擎类 | 环境变量前缀 | 构造参数 |
 |---|---|---|---|
-| Realtime E2E 语音 | `volcengine.RealtimeModel` | `VOLCENGINE_REALTIME_*` | `app_id=...`、`access_token=...`（kw） |
 | STT（流式 ASR） | `volcengine.STT` | `VOLCENGINE_STT_*` | `app_id=...`、`access_token=...`（kw） |
 | TTS（豆包 V3 分块 HTTP） | `volcengine.TTS` | `VOLCENGINE_TTS_*` | `app_id=...`（kw）+ `access_token=...`（kw） |
 | LLM（豆包 1.5-pro，OpenAI 兼容） | `volcengine.LLM` | `VOLCENGINE_LLM_API_KEY` | `model=...`、`api_key=...`（kw） |
 
-`RealtimeModel.model` 取值：`"O"`（标准能力 + 联网搜索 + 高级音色）或 `"SC"`（角色增强 + 克隆音色 + `character_manifest`）。可选参数 `opening=...` 让模型在 session 启动时说一段开场白；`enable_volc_websearch=` + `volc_websearch_api_key=` 接入火山引擎"AI 联网搜索"产品（需在控制台开通）。
-
 ## 架构要点
 
-- **开场白流程** — `VolcengineAgent.on_enter` 故意 **不** 调 `self.session.generate_reply(...)`：vendor 的 `RealtimeSession.generate_reply` 是占位实现，5 秒后必抛 `RealtimeError` 把用户踢出房间。受支持的做法是 `RealtimeModel(opening="…")`，由 vendor 的 `_run_ws` 启动路径在 WebSocket 就绪后自动发一条 `hello_request`。
+- **开场白流程** — `VolcengineAgent.on_enter` 调用 `self.session.generate_reply()` 触发 LLM 出一句开场白并经 TTS 合成广播，让客户端进房就能听到招呼声。
 - **文本输入** — 客户端通过 DataChannel `TOPIC_CHAT` 发文本。`main.py` 用 `_custom_text_input_cb` 覆盖了默认处理（`sess.interrupt()` + `sess.generate_reply(user_input=ev.text)`），只为加中文日志。`RoomInputOptions(text_input_cb=...)` 必须传给 `session.start(...)` —— **不是** `AgentSession.__init__` 的参数（`livekit-agents 1.5.x` 的契约）。
 - **日志去重的三处 patch** — `main.py` 顶部的三段 monkey-patch 是必需而非可选：
   1. `cli.log.setup_logging` 和 `cli._run.setup_logging` 被打成 no-op，避免 LiveKit 的 JSON handler 叠加在我们的 `logging.basicConfig` 上。
   2. `_ProcClient.initialize_logger` 被包了一层：先把从父进程继承下来的 `StreamHandler` 摘掉，再装 IPC 的 `LogQueueHandler`。不这样做的话，每条日志会在子进程 stdout 输出一遍，再通过 IPC 回到主进程输出第二遍，worker 日志完全没法看。
-- **`PIPELINE` 是模块级常量** — `PIPELINE = os.environ.get("PIPELINE", "realtime")` 在 import 时读一次。要在同一进程里切模式只能重启 worker；`PIPELINE=… python main.py start` 是唯一的旋钮。
 
 ## 已知坑
 

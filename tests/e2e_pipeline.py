@@ -1,10 +1,9 @@
 """End-to-end test for the **pipeline** (STT + LLM + TTS) variant.
 
-Mirrors ``e2e_realtime.py`` but the worker is launched with
-``PIPELINE=pipeline`` (separate STT + LLM + TTS WebSocket/HTTP calls)
-instead of the single RealtimeModel WebSocket.
+OpenVox 当前唯一支持的运行模式是 STT + LLM + TTS pipeline。本测试
+针对该管线做完整的多轮 e2e 验证。
 
-What this test actually verifies (beyond e2e_realtime.py):
+What this test actually verifies:
 1. **Opening greeting**: agent says something non-silent *before* the user
    sends any audio (proves the pipeline-mode greeting in ``on_enter`` fires).
 2. **Reply correctness**: each agent's reply is checked by reading the
@@ -17,9 +16,8 @@ Prerequisites:
 - A running LiveKit server. The shared remote instance at
   ``wss://livekit.openz.top:7443`` (see .env) is the default; override via
   E2E_LIVEKIT_URL.
-- Worker running **with pipeline mode** (the main.py in this worktree has
-  the ``[LLM-TEXT]`` marker patch):
-      PIPELINE=pipeline python main.py start
+- Worker running (the main.py in this worktree has the ``[LLM-TEXT]`` marker patch):
+      python main.py start
   The worker must register with the same ``AGENT_NAME`` (default
   ``openvox``) as this test's ``lk dispatch create``. The worker log must be
   written to a path that this test can read — by default the test looks
@@ -36,7 +34,7 @@ Prerequisites:
 
 To run:
     source .venv/bin/activate
-    PIPELINE=pipeline python main.py start   # in another terminal
+    python main.py start   # in another terminal
     pytest tests/e2e_pipeline.py -v -s
 """
 from __future__ import annotations
