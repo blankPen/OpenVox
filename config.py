@@ -1,17 +1,17 @@
 """JSON 配置加载器。
 
-从 ``~/.openz/config.json`` 读取 worker / bridge 启动所需的全部配置项。
+从 ``~/.openvox/config.json`` 读取 worker / bridge 启动所需的全部配置项。
 取代之前散落在 ``.env`` 里的环境变量。
 
 设计原则：
 - 嵌套结构按业务段分组（volcengine / livekit / bridge / hermes）
 - 配置项读取走点路径，例如 ``cfg.require("volcengine.stt.app_id")``
 - ``require`` 缺 key 时抛 ``ConfigError``，fail-fast 在 worker 启动时
-- 默认路径 ``~/.openz/config.json``；测试可通过 ``OPENZ_CONFIG`` 环境变量覆盖
+- 默认路径 ``~/.openvox/config.json``；测试可通过 ``OPENVOX_CONFIG`` 环境变量覆盖
 - 模块导入即单例缓存 ``_cfg``；测试用 ``reset_config()`` 清掉
 
 扩展时：
-- 新增业务段：在 ``~/.openz/config.json`` 顶层加 key
+- 新增业务段：在 ``~/.openvox/config.json`` 顶层加 key
 - 新增字段：在所属业务段加 sub-key，调用方用 ``cfg.require("new.field")``
 - 缺默认值：``cfg.get("foo", default="x")``
 """
@@ -24,14 +24,14 @@ from typing import Any
 
 
 CONFIG_PATH = Path(
-    os.environ.get("OPENZ_CONFIG", "~/.openz/config.json")
+    os.environ.get("OPENVOX_CONFIG", "~/.openvox/config.json")
 ).expanduser()
 
 
 def _resolve_default_path() -> Path:
-    """运行时重读 OPENZ_CONFIG（让测试可以 monkeypatch）。"""
+    """运行时重读 OPENVOX_CONFIG（让测试可以 monkeypatch）。"""
     return Path(
-        os.environ.get("OPENZ_CONFIG", "~/.openz/config.json")
+        os.environ.get("OPENVOX_CONFIG", "~/.openvox/config.json")
     ).expanduser()
 
 

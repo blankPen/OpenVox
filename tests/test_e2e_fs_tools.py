@@ -59,7 +59,7 @@ def _start_worker() -> subprocess.Popen | None:
     if _port_open("127.0.0.1", 8081):
         return None
     repo_root = Path(__file__).parent.parent
-    py = "/Users/pz/workspace/livekit/.venv/bin/python"
+    py = "/Users/pz/workspace/openvox/.venv/bin/python"
     log_path = Path("/tmp/e2e_fs_tools_worker.log")
     log_fh = open(log_path, "w")
     proc = subprocess.Popen(

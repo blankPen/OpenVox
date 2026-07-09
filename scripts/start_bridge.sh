@@ -23,12 +23,12 @@ else
     exit 1
 fi
 
-# 配置入口：~/.openz/config.json（与 start.sh 一致；OPENZ_CONFIG 可覆盖）
-CONFIG_PATH="${OPENZ_CONFIG:-$HOME/.openz/config.json}"
+# 配置入口：~/.openvox/config.json（与 start.sh 一致；OPENVOX_CONFIG 可覆盖）
+CONFIG_PATH="${OPENVOX_CONFIG:-$HOME/.openvox/config.json}"
 CONFIG_PATH="${CONFIG_PATH/#\~/$HOME}"
 if [ ! -f "$CONFIG_PATH" ]; then
     echo "ERROR: config not found: $CONFIG_PATH"
-    echo "       bridge_server.py 不再读本地 .env；请创建 ~/.openz/config.json。"
+    echo "       bridge_server.py 不再读本地 .env；请创建 ~/.openvox/config.json。"
     exit 1
 fi
 if ! "$PY" -c "import json,sys; json.load(open(sys.argv[1]))" "$CONFIG_PATH" 2>/dev/null; then

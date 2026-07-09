@@ -12,7 +12,7 @@ main.py 在模块顶部装了一个 monkey-patch，把 None-choices 的块在到
 2. 集成：构造 main.openai.LLM，mock openai SDK 让它 yield None-choices chunk，
    调 chat() 必须不抛 TypeError 且有效 chunk 透传。
 
-main._cfg 用 fake Config 注入，避免依赖 ~/.openz/config.json。
+main._cfg 用 fake Config 注入，避免依赖 ~/.openvox/config.json。
 """
 from __future__ import annotations
 
@@ -152,7 +152,7 @@ def _make_fake_config() -> "Config":
 
 @pytest.fixture
 def fake_config(monkeypatch):
-    """注入 fake Config 到 main，绕开 ~/.openz/config.json。"""
+    """注入 fake Config 到 main，绕开 ~/.openvox/config.json。"""
     import main
     monkeypatch.setattr(main, "_cfg", _make_fake_config())
     return main._cfg

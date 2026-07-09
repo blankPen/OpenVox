@@ -24,15 +24,15 @@ else
     exit 1
 fi
 
-# 配置入口：~/.openz/config.json（路径可用 OPENZ_CONFIG 环境变量覆盖）。
+# 配置入口：~/.openvox/config.json（路径可用 OPENVOX_CONFIG 环境变量覆盖）。
 # main.py 在 import 时就读，缺关键 key 会 ConfigError 早抛。这里只做
 # 一次性的存在性 / 语法检查，让启动脚本能先报而不是要等 worker 起来后
 # 在日志里才看到 import error。
-CONFIG_PATH="${OPENZ_CONFIG:-$HOME/.openz/config.json}"
+CONFIG_PATH="${OPENVOX_CONFIG:-$HOME/.openvox/config.json}"
 CONFIG_PATH="${CONFIG_PATH/#\~/$HOME}"  # 展开开头的 ~
 if [ ! -f "$CONFIG_PATH" ]; then
     echo "ERROR: config not found: $CONFIG_PATH"
-    echo "       main.py 不再读本地 .env；请创建 ~/.openz/config.json（schema 见 config.py）。"
+    echo "       main.py 不再读本地 .env；请创建 ~/.openvox/config.json（schema 见 config.py）。"
     exit 1
 fi
 if ! "$PY" -c "import json,sys; json.load(open(sys.argv[1]))" "$CONFIG_PATH" 2>/dev/null; then

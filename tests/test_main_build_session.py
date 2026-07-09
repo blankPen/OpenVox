@@ -6,7 +6,7 @@ These tests assert the public contract of ``_build_session``:
 * STT / TTS 仍是火山引擎
 * 未知 PIPELINE 必须抛 ValueError
 * qwen-realtime / volcengine.RealtimeModel 分支必须不存在
-* 配置从 ~/.openz/config.json 读取（不再用 .env / 环境变量）
+* 配置从 ~/.openvox/config.json 读取（不再用 .env / 环境变量）
 """
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ def _make_fake_config() -> "Config":  # type: ignore[name-defined]  # noqa: F821
 
 @pytest.fixture
 def fake_config(monkeypatch):
-    """Inject a fake Config into main so _build_session doesn't read ~/.openz/config.json."""
+    """Inject a fake Config into main so _build_session doesn't read ~/.openvox/config.json."""
     import main
     fake = _make_fake_config()
     monkeypatch.setattr(main, "_cfg", fake)

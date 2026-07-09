@@ -34,7 +34,7 @@ from config import get_config  # noqa: E402
 logger = logging.getLogger("bridge.server")
 
 # ──────────────────────────────────────────────────────────────────
-# Config (从 ~/.openz/config.json 读，schema 见 config.py 模块注释)
+# Config (从 ~/.openvox/config.json 读，schema 见 config.py 模块注释)
 # ──────────────────────────────────────────────────────────────────
 _cfg = get_config()
 

@@ -207,7 +207,7 @@ def test_persona_files_exist():
 - [ ] **Step 7: 跑测试确认通过**
 
 ```bash
-cd /Users/pz/workspace/livekit
+cd /Users/pz/workspace/openvox
 source .venv/bin/activate
 pytest tests/test_workspace_layout.py -v
 ```
@@ -1413,12 +1413,12 @@ Expected: `26 passed`（之前 24 + 2 个新 smoke test）
 - [ ] **Step 4: 手动 sanity check — import main 不报错**
 
 ```bash
-cd /Users/pz/workspace/livekit
+cd /Users/pz/workspace/openvox
 source .venv/bin/activate
 python -c "import sys; sys.path.insert(0, 'workspace'); import main; print('OK', main.WORKSPACE_ROOT)"
 ```
 
-Expected: `OK /Users/pz/workspace/livekit/workspace`
+Expected: `OK /Users/pz/workspace/openvox/workspace`
 
 - [ ] **Step 5: 提交**
 
@@ -1432,7 +1432,7 @@ git commit -m "test(e2e): add end-to-end smoke test for full wiring"
 ## 验证清单（plan 完成后跑一遍）
 
 ```bash
-cd /Users/pz/workspace/livekit
+cd /Users/pz/workspace/openvox
 source .venv/bin/activate
 
 # 1. 全套测试
@@ -1441,7 +1441,7 @@ pytest tests/ -v
 
 # 2. import sanity
 python -c "import main; print(main.WORKSPACE_ROOT)"
-# 期望：/Users/pz/workspace/livekit/workspace
+# 期望：/Users/pz/workspace/openvox/workspace
 
 # 3. 模块独立 import
 python -c "import sys; sys.path.insert(0, 'workspace'); from agent_persona import load_persona; from agent_skills import scan_skills; from agent_extensions import load_tools; from agent_memory import MemoryStore; print('all 4 modules importable')"
@@ -1465,7 +1465,7 @@ python main.py dev
 | `tests/e2e_generate_reply.py` 修复 | 与本 plan 无关 | 单独任务 |
 | `_session_holder` 全局变量改闭包 | 简化实现 | v0.2：refactor session injection |
 | 多用户同房间 | v0.1 取第一个 + warn | v0.3：multi-user |
-| memory 迁移到 `~/.openz/` | 用户决定"先放项目目录" | v0.3：data 迁移 |
+| memory 迁移到 `~/.openvox/` | 用户决定"先放项目目录" | v0.3：data 迁移 |
 
 ## 附录 B：依赖关系图
 

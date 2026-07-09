@@ -1,7 +1,7 @@
 [project]
-name = "livekit-volcengine-worker"
+name = "openvox"
 version = "0.1.0"
-description = "LiveKit Agents worker with Volcengine STT/TTS + Hermes OpenAI-compatible LLM"
+description = "OpenVox worker: Volcengine STT/TTS + Hermes OpenAI-compatible LLM via LiveKit Agents"
 requires-python = ">=3.10"
 dependencies = [
     "livekit-agents[otel,silero,turn-detector]~=1.5",

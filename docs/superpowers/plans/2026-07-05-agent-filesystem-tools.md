@@ -233,7 +233,7 @@ def test_is_sensitive_allows_tmp():
 
 
 def test_is_sensitive_allows_workspace():
-    assert is_sensitive("/Users/pz/workspace/livekit/main.py") is False
+    assert is_sensitive("/Users/pz/workspace/openvox/main.py") is False
 
 
 def test_is_sensitive_allows_relative_path():
@@ -411,7 +411,7 @@ from pathlib import Path
 
 from livekit.agents import function_tool
 
-logger = logging.getLogger("volcengine-agent")
+logger = logging.getLogger("openvox")
 
 
 @function_tool()
@@ -483,7 +483,7 @@ cat /tmp/fs_baseline_test.txt
 
 # 派单
 source .venv/bin/activate
-lk dispatch create --dev --room fs-baseline --agent-name openz
+lk dispatch create --dev --room fs-baseline --agent-name openvox
 
 # 加入房间发文本（用 lk 或浏览器客户端）
 # 客户端发："帮我读 /tmp/fs_baseline_test.txt 的内容"
@@ -645,7 +645,7 @@ def test_read_file_sensitive_path_warning(tmp_path, caplog):
     original = rf_mod.is_sensitive
     rf_mod.is_sensitive = lambda p: True
     try:
-        with caplog.at_level(logging.WARNING, logger="volcengine-agent"):
+        with caplog.at_level(logging.WARNING, logger="openvox"):
             result = read_file(str(target))
         assert "SENSITIVE_PATH" in caplog.text
     finally:
@@ -696,7 +696,7 @@ from livekit.agents import function_tool
 from .._sensitive import is_sensitive  # noqa: F401  re-exported for tests
 from workspace.extensions.tools.fs._sensitive import is_sensitive as _is_sensitive
 
-logger = logging.getLogger("volcengine-agent")
+logger = logging.getLogger("openvox")
 
 _MAX_BYTES = 1_000_000  # 1MB
 _MAX_LINES = 2000
@@ -875,7 +875,7 @@ def test_write_file_write_op_warning_logged(tmp_path, caplog):
     from workspace.extensions.tools.fs.write_file import write_file
     target = tmp_path / "out.txt"
     import logging
-    with caplog.at_level(logging.WARNING, logger="volcengine-agent"):
+    with caplog.at_level(logging.WARNING, logger="openvox"):
         write_file(str(target), "x")
     assert "WRITE_OP" in caplog.text
 
@@ -927,7 +927,7 @@ from livekit.agents import function_tool
 
 from workspace.extensions.tools.fs._sensitive import is_sensitive
 
-logger = logging.getLogger("volcengine-agent")
+logger = logging.getLogger("openvox")
 
 
 @function_tool()
@@ -1105,7 +1105,7 @@ def test_edit_file_warning_logged(tmp_path, caplog):
     from workspace.extensions.tools.fs.edit_file import edit_file
     target = tmp_path / "x.txt"
     target.write_text("a", encoding="utf-8")
-    with caplog.at_level(logging.WARNING, logger="volcengine-agent"):
+    with caplog.at_level(logging.WARNING, logger="openvox"):
         edit_file(str(target), "a", "b")
     assert "EDIT_OP" in caplog.text
 
@@ -1149,7 +1149,7 @@ from livekit.agents import function_tool
 
 from workspace.extensions.tools.fs._sensitive import is_sensitive
 
-logger = logging.getLogger("volcengine-agent")
+logger = logging.getLogger("openvox")
 
 
 @function_tool()
@@ -1334,7 +1334,7 @@ from pathlib import Path
 
 from livekit.agents import function_tool
 
-logger = logging.getLogger("volcengine-agent")
+logger = logging.getLogger("openvox")
 
 
 @function_tool()
@@ -1501,7 +1501,7 @@ from pathlib import Path
 
 from livekit.agents import function_tool
 
-logger = logging.getLogger("volcengine-agent")
+logger = logging.getLogger("openvox")
 
 
 @function_tool()
@@ -1685,7 +1685,7 @@ def test_bash_pipes_and_chains():
 def test_bash_warning_logged(caplog):
     import logging
     from workspace.extensions.tools.fs.bash import bash
-    with caplog.at_level(logging.WARNING, logger="volcengine-agent"):
+    with caplog.at_level(logging.WARNING, logger="openvox"):
         bash("echo hi")
     assert "BASH_OP" in caplog.text
 ```
@@ -1715,7 +1715,7 @@ from pathlib import Path
 
 from livekit.agents import function_tool
 
-logger = logging.getLogger("volcengine-agent")
+logger = logging.getLogger("openvox")
 
 _MIN_TIMEOUT = 1
 _MAX_TIMEOUT = 300

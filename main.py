@@ -3,8 +3,8 @@
 当前唯一支持的运行模式是 PIPELINE=pipeline：火山引擎 STT + LLM（经本地
 bridge 打到 Hermes api_server）+ 火山引擎 TTS。
 
-配置从 ``~/.openz/config.json`` 读取（schema 见 config.py 模块头注释）。路径
-可通过 OPENZ_CONFIG 环境变量覆盖，主要供测试使用。模块导入即读一次。
+配置从 ``~/.openvox/config.json`` 读取（schema 见 config.py 模块头注释）。路径
+可通过 OPENVOX_CONFIG 环境变量覆盖，主要供测试使用。模块导入即读一次。
 """
 
 from __future__ import annotations
@@ -127,7 +127,7 @@ def _patched_stt_process(self, data: dict) -> None:
 
 _VolcSTTSpeechStream._process_stream_event = _patched_stt_process  # type: ignore[assignment]
 
-logger = logging.getLogger("volcengine-agent")
+logger = logging.getLogger("openvox-agent")
 
 # 当前唯一支持的 PIPELINE 值是 "pipeline"。读 config 而非环境变量；多分支
 # 历史已合并清理，要扩展新管线直接在 _build_session 入口加 ValueError 之外的分支。
@@ -212,10 +212,10 @@ def _build_session() -> AgentSession:
             f"Unsupported PIPELINE={PIPELINE!r}; only 'pipeline' is supported"
         )
 
-    # _OPENCZ_USER_ID 是 entrypoint() 在远端参与者 join 时写进 os.environ 的
+    # _OPENVOX_USER_ID 是 entrypoint() 在远端参与者 join 时写进 os.environ 的
     # 运行时状态，不是 config；build_session() 在 worker 启动早期就可能被
     # 调一次（_prewarm），此时 user_id 为空，符合预期。
-    user_id = os.environ.get("_OPENCZ_USER_ID", "")
+    user_id = os.environ.get("_OPENVOX_USER_ID", "")
 
     return AgentSession(
         stt=volcengine.STT(
@@ -291,9 +291,9 @@ async def entrypoint(ctx: JobContext) -> None:
     except asyncio.TimeoutError:
         logger.warning("[Worker] 20s 内无远端参与者")
         return
-    # _OPENCZ_USER_ID 是 session 级运行时状态而非 config——后续 LLM 调用会
-    # 通过 os.environ["_OPENCZ_USER_ID"] 读到。再次 build_session() 才能拿到。
-    os.environ["_OPENCZ_USER_ID"] = user_id
+    # _OPENVOX_USER_ID 是 session 级运行时状态而非 config——后续 LLM 调用会
+    # 通过 os.environ["_OPENVOX_USER_ID"] 读到。再次 build_session() 才能拿到。
+    os.environ["_OPENVOX_USER_ID"] = user_id
     logger.info(f"[Worker] user_id={user_id}")
 
 
