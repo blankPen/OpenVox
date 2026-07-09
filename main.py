@@ -125,6 +125,34 @@ def _patched_stt_process(self, data: dict) -> None:
 
 _VolcSTTSpeechStream._process_stream_event = _patched_stt_process  # type: ignore[assignment]
 
+# ───────── volcengine STT 关停时的 CancelledError 噪音抑制 ─────────
+# livekit-agents 1.6.x 把每个 job 跑在独立子进程；断开时框架 cancel
+# 子进程里所有 task。volcengine STT 插件的 SpeechStream._run 内部起一个
+# 嵌套的 recv_task 在 aiohttp 的 ws.receive() 上阻塞等待服务器帧，被
+# cancel 时抛 asyncio.CancelledError，外层 asyncio.gather 把它收作
+# _GatheringFuture 的 exception，但 gather 自己也已被 cancel、没人再
+# await/result() 拿这个异常 — Python asyncio runtime 兜底把它打成
+# "exception was never retrieved" ERROR 日志，污染 worker 日志。
+#
+# 修复：在 SpeechStream._run 外层包一层 try/except CancelledError 直接
+# return，保留所有原有的 finally 清理（ws.close + gracefully_cancel），
+# 只是把 cancel 路径上的尾迹吞掉。其他异常照旧 propagate。
+import asyncio as _asyncio
+_orig_stt_run = _VolcSTTSpeechStream._run
+
+
+async def _patched_stt_run(self):  # noqa: ANN001
+    try:
+        await _orig_stt_run(self)
+    except _asyncio.CancelledError:
+        # livekit-agents 子进程在拆；ws.receive() 被 cancel 是预期路径，
+        # 静默退出避免 _GatheringFuture 噪音。
+        return
+
+
+_VolcSTTSpeechStream._run = _patched_stt_run  # type: ignore[assignment]
+# ───────── 补丁结束 ─────────
+
 logger = logging.getLogger("openvox-agent")
 
 
@@ -155,8 +183,16 @@ class VolcengineAgent(Agent):
     async def on_enter(self) -> None:
         # 主动打招呼：generate_reply() 触发 LLM 出
         # 一句开场白并经 TTS 合成广播，让客户端进房就能听到招呼声。
+        #
+        # 必须给 generate_reply 传 ``user_input`` 触发一条 user 消息注入 chat_ctx。
+        # 火山引擎 Hermes 网关严格校验 OpenAI 兼容 chat 接口，要求 messages 数组
+        # 里至少有一条 user role 的消息；只传 system(instr) 不传 user_input 时，
+        # 上游会回 400 ``No user message found in messages`` 把 LLM 调用炸掉。
+        # livekit-agents 1.6.x 的 ``_pipeline_reply_task_impl`` 只在 ``new_message
+        # is not None`` 时往 chat_ctx.insert(user_message)，所以无 user_input 调
+        # generate_reply() 等价于发出空 messages 请求。
         logger.info("[Agent] 主动打招呼")
-        await self.session.generate_reply()
+        await self.session.generate_reply(user_input="打招呼")
 
 
 # ---------------------------------------------------------------------------
