@@ -23,14 +23,23 @@ else
     exit 1
 fi
 
-# 加载 .env（让 BRIDGE_* / HERMES_API_* 注入到 bridge_server）
-if [ -f .env ]; then
-    set -a
-    source .env
-    set +a
+# 配置入口：~/.openz/config.json（与 start.sh 一致；OPENZ_CONFIG 可覆盖）
+CONFIG_PATH="${OPENZ_CONFIG:-$HOME/.openz/config.json}"
+CONFIG_PATH="${CONFIG_PATH/#\~/$HOME}"
+if [ ! -f "$CONFIG_PATH" ]; then
+    echo "ERROR: config not found: $CONFIG_PATH"
+    echo "       bridge_server.py 不再读本地 .env；请创建 ~/.openz/config.json。"
+    exit 1
+fi
+if ! "$PY" -c "import json,sys; json.load(open(sys.argv[1]))" "$CONFIG_PATH" 2>/dev/null; then
+    echo "ERROR: config 解析失败: $CONFIG_PATH"
+    exit 1
 fi
 
-BRIDGE_PORT="${BRIDGE_PORT:-8765}"
+# 端口从 config 读（与 bridge_server.py 内部一致）。BRIDGE_PORT shell 变量
+# 仍可覆盖，方便临时换端口调试。
+BRIDGE_PORT_FROM_CONFIG=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['bridge_server']['port'])" "$CONFIG_PATH")
+BRIDGE_PORT="${BRIDGE_PORT:-$BRIDGE_PORT_FROM_CONFIG}"
 LOG="${BRIDGE_LOG:-/tmp/bridge.log}"
 
 stop_bridge() {
