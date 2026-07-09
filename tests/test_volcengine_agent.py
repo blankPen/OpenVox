@@ -63,7 +63,13 @@ def test_agent_instructions_override():
 
 
 def test_on_enter_pipeline_calls_generate_reply():
-    """pipeline 模式下 on_enter 必须调用 ``self.session.generate_reply()``。"""
+    """pipeline 模式下 on_enter 必须调用 ``self.session.generate_reply()``，
+    且必须传 ``user_input=`` 注入占位 user 消息。
+
+    不传 user_input 时 livekit-agents 1.6.x 的 ``_pipeline_reply_task_impl``
+    不会往 chat_ctx 插入 user 消息，Hermes 网关会回 400
+    "No user message found in messages"。
+    """
     main = _load_main_module()
 
     # ``livekit.agents.Agent.session`` 是只读 property（通过 ``_get_activity_or_raise`` 解析）。
@@ -90,6 +96,19 @@ def test_on_enter_pipeline_calls_generate_reply():
     asyncio.run(agent.on_enter())
 
     mock_session.generate_reply.assert_awaited_once()
+    # 必须显式传 user_input（不能仅依赖 generate_reply() 默认行为），
+    # 否则 chat_ctx 里只有 system(instr) 没有 user，Hermes 400。
+    call_kwargs = mock_session.generate_reply.call_args.kwargs
+    assert "user_input" in call_kwargs, (
+        f"on_enter 调 generate_reply 时必须传 user_input=... 占位 user 消息，"
+        f"否则 Hermes 网关会 400 'No user message found in messages'。"
+        f"实际 kwargs={call_kwargs!r}"
+    )
+    user_input = call_kwargs["user_input"]
+    assert isinstance(user_input, str) and user_input.strip(), (
+        f"user_input 必须是非空字符串（成为 chat 里 role='user' 的 ChatMessage），"
+        f"实际={user_input!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
