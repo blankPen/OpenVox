@@ -8,9 +8,7 @@ bridge 打到 Hermes api_server）+ 火山引擎 TTS。
 """
 
 from __future__ import annotations
-import asyncio
 import logging
-import os
 import sys
 
 from config import get_config
@@ -203,19 +201,13 @@ def _build_session() -> AgentSession:
     """构建 ``AgentSession``。
 
     当前唯一支持的 PIPELINE 是 ``"pipeline"`` —— 火山引擎 STT/TTS 配
-    ``openai.LLM``。LLM 通过 ``bridge.base_url``（默认 :8765）打到
-    ``scripts/bridge_server.py``，bridge 再透传到 Hermes gateway 自带的
-    OpenAI 兼容 api_server（:8642，``hermes.api_base``）。
+    ``openai.LLM``，直连 Hermes gateway 的 OpenAI 兼容 api_server（默认
+    :8642，``hermes.api_base``）。
     """
     if PIPELINE != "pipeline":
         raise ValueError(
             f"Unsupported PIPELINE={PIPELINE!r}; only 'pipeline' is supported"
         )
-
-    # _OPENVOX_USER_ID 是 entrypoint() 在远端参与者 join 时写进 os.environ 的
-    # 运行时状态，不是 config；build_session() 在 worker 启动早期就可能被
-    # 调一次（_prewarm），此时 user_id 为空，符合预期。
-    user_id = os.environ.get("_OPENVOX_USER_ID", "")
 
     return AgentSession(
         stt=volcengine.STT(
@@ -223,13 +215,9 @@ def _build_session() -> AgentSession:
             access_token=_cfg.require("volcengine.stt.access_token"),
         ),
         llm=openai.LLM(
-            model=_cfg.require("bridge.model"),
-            base_url=_cfg.require("bridge.base_url"),
-            api_key=_cfg.require("bridge.api_key"),
-            extra_headers={
-                "X-LiveKit-Room": _cfg.require("bridge.livekit_room_name"),
-                "X-LiveKit-User": user_id,
-            },
+            model=_cfg.require("hermes.model"),
+            base_url=_cfg.require("hermes.api_base"),
+            api_key=_cfg.require("hermes.api_key"),
         ),
         tts=volcengine.TTS(
             app_id=_cfg.require("volcengine.tts.app_id"),
@@ -248,7 +236,6 @@ async def entrypoint(ctx: JobContext) -> None:
     logger.info(f"[Worker] 收到任务，正在加入房间: {ctx.room.name} (pipeline={PIPELINE})")
 
     session = _build_session()
-    # room_input_options 传给 session.start()（livekit-agents 1.5+ 也可在 __init__ 中传入）
 
     await session.start(
         agent=VolcengineAgent(),
@@ -257,44 +244,8 @@ async def entrypoint(ctx: JobContext) -> None:
             text_input_cb=_custom_text_input_cb,
         ),
     )
-
-    # Connect 后 remote_participants 才可见
-    # 用事件而不是轮询，避免 worker process 重启时卡 15s
-    user_id_future: asyncio.Future[str] = asyncio.get_event_loop().create_future()
-
-    @ctx.room.on("participant_connected")
-    def _on_participant_connected(participant):
-        if participant.identity == ctx.room.local_participant.identity:
-            return  # skip self
-        if not user_id_future.done():
-            user_id_future.set_result(participant.identity)
-            logger.info(f"[Worker] participant_connected event: identity={participant.identity}")
-
-    await ctx.connect()
-    logger.info(f"[Worker] 已连接到房间: {ctx.room.name}")
-
-    # 关键：participant_connected 事件**不会**对 agent join 之前已在房里的
-    # 远端触发（典型场景：test 先 dispatch 再 connect，agent 后 join），
-    # 所以 ctx.connect() 之后立刻看 remote_participants。
-    if ctx.room.remote_participants:
-        first = next(iter(ctx.room.remote_participants.values()))
-        if not user_id_future.done():
-            user_id_future.set_result(first.identity)
-            logger.info(
-                f"[Worker] participant already present: identity={first.identity} "
-                f"(skipping wait_for event)"
-            )
-
-    # 等远端参与者加入（带超时但不卡事件循环）
-    try:
-        user_id = await asyncio.wait_for(user_id_future, timeout=20.0)
-    except asyncio.TimeoutError:
-        logger.warning("[Worker] 20s 内无远端参与者")
-        return
-    # _OPENVOX_USER_ID 是 session 级运行时状态而非 config——后续 LLM 调用会
-    # 通过 os.environ["_OPENVOX_USER_ID"] 读到。再次 build_session() 才能拿到。
-    os.environ["_OPENVOX_USER_ID"] = user_id
-    logger.info(f"[Worker] user_id={user_id}")
+    # session.start 之后 worker 已加入房间 signaling，无需再处理
+    # participant 事件——AgentSession 内部负责订阅所有远端参与者的轨道。
 
 
 if __name__ == "__main__":

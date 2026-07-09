@@ -141,11 +141,10 @@ def _make_fake_config() -> "Config":
             "tts": {"app_id": "tts-id", "access_token": "tts-token"},
         },
         "livekit": {"agent_name": "test-agent"},
-        "bridge": {
-            "base_url": "http://127.0.0.1:9999/v1",
+        "hermes": {
+            "api_base": "http://127.0.0.1:9999/v1",
             "api_key": "test-key",
             "model": "test-model",
-            "livekit_room_name": "test-room",
         },
     })
 

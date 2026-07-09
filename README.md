@@ -1,6 +1,6 @@
 # OpenVox — Volcengine 语音 Agent 本地运行手册
 
-> **OpenVox** 是一个基于 LiveKit Agents 的语音 worker，对接火山引擎（Volcengine）的 STT / TTS，LLM 走本地 Hermes OpenAI-兼容 api_server（通过 `scripts/bridge_server.py` 转发）。把 `livekit-plugins-volcengine`（来自 [di-osc/livekit-plugins-chinese](https://github.com/di-osc/livekit-plugins-chinese/tree/main/livekit-plugins/livekit-plugins-volcengine)）挂在 LiveKit Server 上。
+> **OpenVox** 是一个基于 LiveKit Agents 的语音 worker，对接火山引擎（Volcengine）的 STT / TTS，LLM 直连本地 Hermes OpenAI-兼容 api_server。把 `livekit-plugins-volcengine`（来自 [di-osc/livekit-plugins-chinese](https://github.com/di-osc/livekit-plugins-chinese/tree/main/livekit-plugins/livekit-plugins-volcengine)）挂在 LiveKit Server 上。
 >
 > 默认管线是 **Realtime E2E**（一条 WebSocket 直连火山引擎 dialogue 端点），也可一键切到 **STT+LLM+TTS pipeline**。
 
@@ -89,7 +89,7 @@ lk dispatch create --dev --room demo --agent-name openvox
 
 ## 3. 当前管线
 
-当前唯一支持的管线是 `pipeline`（STT + LLM + TTS 三段式），由 `~/.openvox/config.json` 里的 `"pipeline": "pipeline"` 控制。LLM 走本地 `scripts/bridge_server.py`（默认 :8765），再透传到 Hermes gateway 的 OpenAI 兼容 api_server（:8642）。
+当前唯一支持的管线是 `pipeline`（STT + LLM + TTS 三段式），由 `~/.openvox/config.json` 里的 `"pipeline": "pipeline"` 控制。LLM 直连 Hermes gateway 的 OpenAI 兼容 api_server（默认 :8642，配置在 `hermes.api_base`）。
 
 > 注意：STT 段要求 1605412251 这个 AppID 在火山引擎控制台**开通了「流式语音识别 大模型」服务**，否则 STT WebSocket 会 403。
 
@@ -123,8 +123,7 @@ openvox/
 ├── README.md                               # 本文件：给人类看的操作手册
 ├── scripts/
 │   ├── start.sh                            # 启动 worker
-│   ├── start_bridge.sh                     # 启动 Hermes bridge
-│   └── bridge_server.py                    # OpenAI 兼容 :8765 → Hermes :8642
+│   └── run_tests.sh                        # 跑测试
 ├── plugins/
 │   └── livekit-plugins-volcengine/         # vendored 火山引擎插件
 ├── tests/

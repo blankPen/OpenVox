@@ -48,8 +48,8 @@ def test_require_raises_for_partial_nested_missing():
 
 
 def test_require_returns_value_for_present_key():
-    cfg = Config({"bridge": {"model": "hermes-agent"}})
-    assert cfg.require("bridge.model") == "hermes-agent"
+    cfg = Config({"hermes": {"model": "hermes-agent"}})
+    assert cfg.require("hermes.model") == "hermes-agent"
 
 
 def test_load_from_file(tmp_path):
