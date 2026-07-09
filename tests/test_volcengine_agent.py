@@ -4,7 +4,7 @@ Task 2 收尾测试，验证以下不变量：
 
 * ``VolcengineAgent`` 默认 instructions 是中文小语人设
 * 可以通过 ``instructions=`` 参数覆盖默认值
-* ``on_enter`` 在 PIPELINE=pipeline 时触发 ``generate_reply``
+* ``on_enter`` 触发 ``generate_reply``（pipeline 是唯一模式）
 * ``main.py`` 不再 ``import agent_persona``
 * ``main.py`` 不再有 ``_session_holder`` 模块级变量
 * ``main.py`` 不再有 ``build_agent`` 函数
@@ -65,9 +65,6 @@ def test_agent_instructions_override():
 def test_on_enter_pipeline_calls_generate_reply():
     """pipeline 模式下 on_enter 必须调用 ``self.session.generate_reply()``。"""
     main = _load_main_module()
-    # PIPELINE 已经是 "pipeline"（task 1 已切到 pipeline 默认值），
-    # 但保险起见显式设置。
-    main.PIPELINE = "pipeline"
 
     # ``livekit.agents.Agent.session`` 是只读 property（通过 ``_get_activity_or_raise`` 解析）。
     # 测试侧定义一个本地子类覆盖为可读写属性，把 mock session 注入。

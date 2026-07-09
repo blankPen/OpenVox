@@ -47,33 +47,27 @@ echo ""
 case "$MODE" in
     unit)
         echo "[unit] 跑单元测试（不需 LiveKit server）"
-        "$PY" -m pytest tests/ \
-            --ignore=tests/e2e_generate_reply.py \
-            --ignore=tests/test_e2e_fs_tools.py \
-            -v
+        "$PY" -m pytest tests/ -v
         ;;
 
     e2e)
-        echo "[e2e] 跑 e2e 烟雾测试（需要 LiveKit server，autouse fixture 会自动启动 worker）"
-        "$PY" -m pytest tests/test_e2e_fs_tools.py -v -s
+        echo "[e2e] 跑 e2e 烟雾测试（需要 LiveKit server）"
+        "$PY" -m pytest tests/e2e_pipeline.py -v -s
         ;;
 
     full)
         echo "[1/2] 单元测试"
-        "$PY" -m pytest tests/ \
-            --ignore=tests/e2e_generate_reply.py \
-            --ignore=tests/test_e2e_fs_tools.py \
-            -v
+        "$PY" -m pytest tests/ -v
         echo ""
         echo "[2/2] e2e 烟雾测试"
-        "$PY" -m pytest tests/test_e2e_fs_tools.py -v -s
+        "$PY" -m pytest tests/e2e_pipeline.py -v -s
         ;;
 
     *)
         echo "用法：$0 [unit|e2e|full]"
         echo ""
-        echo "  unit  - 单元测试（82 passed），不需 LiveKit"
-        echo "  e2e   - e2e 烟雾测试（6 xfailed），需要 LiveKit + worker"
+        echo "  unit  - 单元测试，不需 LiveKit"
+        echo "  e2e   - e2e 烟雾测试，需要 LiveKit + worker"
         echo "  full  - 全部"
         exit 1
         ;;
