@@ -74,7 +74,7 @@ python main.py start
 
 ```bash
 # 创建一个 dispatch，把 agent 派到 demo 房间
-lk dispatch create --dev --room demo --agent-name openvox
+lk dispatch create --dev --room demo --agent-name openz
 ```
 
 让 alice 进同一个房间说话（三选一）：

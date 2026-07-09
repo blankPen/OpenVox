@@ -9,9 +9,10 @@
 | # | 决策 | 决定 |
 |---|---|---|
 | 1 | 配置目录 `~/.openz/` → `~/.openvox/`，env `OPENZ_CONFIG` → `OPENVOX_CONFIG` | ✅ 改 |
-| 2 | `AGENT_NAME` 从 `openz` 改为 `openvox`；`api_key` 保持 `openz`（远端 server 已注册此 key，改它要同步 server 配置） | ✅ AGENT_NAME 改，api_key 保留 |
+| 2 | `AGENT_NAME` 从 `openz` 改为 `openvox`；`api_key` 保持 `openz`（远端 server 已注册此 key，改它要同步 server 配置） | ✅ 两者都保持 `openz`（见下"实际例外"） |
 | 3 | 项目目录 `/Users/pz/workspace/livekit` → `/Users/pz/workspace/openvox` | ✅ 改（用户手动 `mv`，commit 之后做） |
 | 4 | `docs/superpowers/specs/`、`plans/` 历史文档中的 `~/.openz/` 引用 | ✅ 批量替换 |
+| 5 | `livekit.agent_name` 是否跟项目名一起改 | ❌ 保持 `openz`（外部 app 仍用此名派单，等 app 迁移后再统一） |
 
 ## 改动清单
 
@@ -24,7 +25,7 @@
 | `scripts/start.sh` | `OPENZ_CONFIG` 引用；`$HOME/.openz/config.json` 路径；错误信息文案 |
 | `scripts/start_bridge.sh` | 同上 |
 | `scripts/bridge_server.py` | 注释里 `~/.openz/config.json` 路径 |
-| `~/.openz/config.json`（用户机器上） | `livekit.agent_name: "openz"` → `"openvox"`；**注意**：`api_key` 保持 `"openz"` 不变 |
+| `~/.openvox/config.json`（用户机器上） | `livekit.agent_name` 保持 `"openz"`（与外部 app 的 `lk dispatch create --agent-name openz` 兼容，app 切到 openvox 之前不能动）；`api_key` 保持 `"openz"`（远端 server 已注册） |
 
 ### B. 测试层
 
@@ -77,6 +78,7 @@
 ## 风险
 
 - **api_key 保持 "openz"**：与项目名不一致，但远端 server 已注册此 key；如果改名会导致 worker 签的 JWT 验不过（参考 CLAUDE.md "401 根因" 段）。文档里要显式记录这个例外。
+- **agent_name 保持 "openz"**：与项目名不一致，但用户外部 app 还在用 `lk dispatch create --agent-name openz` 派单；改名会让 worker 收不到派单。等 app 切到 `openvox` 后再统一改。文档里要显式记录这个例外。
 - **目录改名破坏 cwd**：在 PR 合并到 main 之前不要动目录，否则其他 session 引用会断。
-- **测试默认 `AGENT_NAME` 不一致**：e2e_realtime 写的是 `volcengine-agent`，e2e_pipeline 写的是 `openz` — 两者都与 config.json 不一致，全部统一为 `openvox`。
+- **测试默认 `AGENT_NAME` 不一致**：e2e_realtime 写的是 `volcengine-agent`，e2e_pipeline 写的是 `openz` — 两者都与 config.json 不一致。统一为 `openz`（与运行时配置 + app 派单命令一致）。
 - **`_OPENCZ_USER_ID` 是 C→V 拼写错误**：在改名时一起修到 `_OPENVOX_USER_ID`，避免污染新名字。

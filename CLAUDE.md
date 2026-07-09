@@ -67,10 +67,10 @@ vendored 插件一律用 keyword-only 参数。**不要**照搬 PyPI 上 `liveki
 - **8081 端口是 worker 的 IPC 端口**。崩溃的 worker 会让端口持续被占，下一次 `start` 报 `OSError: [Errno 48] address already in use`。`start.sh` 会自动 `lsof -ti:8081 | xargs kill -9`；如果绕过脚本启动，这一步要自己来。
 - **`lk dispatch` / worker 握手 401 的根因** — `--dev` 模式把密钥硬编码为 `devkey/secret`。如果 `.env` 里 `LIVEKIT_API_KEY/SECRET` 不一致（比如用的是 `livekit.yaml` 里的 `openvox`），worker 签的 JWT server 验不过。两条路二选一：
   - 跑裸的 `livekit-local` 容器加 `--dev --bind=0.0.0.0`，`.env` 写 `devkey/secret`；**或者**
-  - 挂载 `livekit.yaml`、去掉 `--dev`（参考 `start-lan.sh` / `start-emu.sh`），让 server 用和 `.env` 一致的 `openvox` 密钥。
+  - 挂载 `livekit.yaml`、去掉 `--dev`（参考 `start-lan.sh` / `start-emu.sh`），让 server 用和 `.env` 一致的 `openz` 密钥。
 - **Mac 上的 Docker 网络** — `docker-compose.yml` 把 `LIVEKIT_URL` 覆盖成 `ws://host.docker.internal:7880`，让容器访问 **宿主机** 的 LiveKit server。如果 server 跑在共享网络的兄弟容器里，要换成服务名（`livekit-local:7880`）。compose 故意用默认 `bridge` 网络 —— 切到 `host` 会把 worker 内部的 8081 IPC 端口暴露到宿主机，并行跑多个 worker 就会撞端口。
 - **"我们装的是 1.2.9" 是个过时的说法**。vendored 插件的 `pyproject.toml` 钉了 1.5.4，但 `pip install -e ... --no-deps` 会跳过这个 pin，加上 dev/Docker 都用 `~=1.5`，实际装的是 1.5.x。代码里所有针对"我们在 1.2.9"做的分支都要更新；唯一仍然有效的 1.2.9 时代怪癖是 `RoomInputOptions` 走 `session.start()` 而不是 `__init__()`。
-- **`.env` 里的 `AGENT_NAME`** — 默认是 `openvox`，但当前 `.env` 设的是 `AGENT_NAME=openvox`。`lk dispatch create --agent-name …` 必须和运行中的 worker 一致，否则派单会一直挂着。
+- **`~/.openvox/config.json` 里的 `livekit.agent_name`** — 默认是 `volcengine-agent`（livekit-agents 上游约定），但当前配置保持 `openz`（外部 app 还在用 `lk dispatch create --agent-name openz` 派单，改了 worker 收不到单）。等 app 切到新名字后再统一。`lk dispatch create --agent-name …` 必须和 worker 注册名一致，否则派单会一直挂着。
 - **测试** — `tests/e2e_generate_reply.py` 是基于旧的 `vendor/` 路径写的，import 就会失败。要么把 `sys.path.insert` 改成指向 `plugins/livekit-plugins-volcengine/livekit`，要么直接删掉；目前仓库里没有其他测试。
 
 ## 参考资料

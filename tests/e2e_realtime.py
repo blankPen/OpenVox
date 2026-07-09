@@ -38,7 +38,7 @@ load_dotenv(ROOT / ".env")
 LIVEKIT_URL = os.environ.get("E2E_LIVEKIT_URL") or os.environ.get("LIVEKIT_URL", "ws://localhost:7880")
 API_KEY = os.environ["LIVEKIT_API_KEY"]
 API_SECRET = os.environ["LIVEKIT_API_SECRET"]
-AGENT_NAME = os.environ.get("AGENT_NAME", "openvox")
+AGENT_NAME = os.environ.get("AGENT_NAME", "openz")
 ROOM_NAME = os.environ.get("E2E_ROOM_NAME", f"e2e-realtime-test-{os.getpid()}")
 
 FIXTURE_DIR = ROOT / "tests" / "fixtures" / "audio"
