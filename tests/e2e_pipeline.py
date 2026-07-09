@@ -21,7 +21,7 @@ Prerequisites:
   the ``[LLM-TEXT]`` marker patch):
       PIPELINE=pipeline python main.py start
   The worker must register with the same ``AGENT_NAME`` (default
-  ``openz``) as this test's ``lk dispatch create``. The worker log must be
+  ``openvox``) as this test's ``lk dispatch create``. The worker log must be
   written to a path that this test can read — by default the test looks
   at ``E2E_WORKER_LOG`` or falls back to the most recent
   ``worker-pipeline*.log`` under ``/Users/pz/.claude/jobs/0f377e69/tmp/``.
@@ -60,7 +60,7 @@ load_dotenv(ROOT / ".env")
 LIVEKIT_URL = os.environ.get("E2E_LIVEKIT_URL") or os.environ.get("LIVEKIT_URL", "ws://localhost:7880")
 API_KEY = os.environ["LIVEKIT_API_KEY"]
 API_SECRET = os.environ["LIVEKIT_API_SECRET"]
-AGENT_NAME = os.environ.get("AGENT_NAME", "volcengine-agent")
+AGENT_NAME = os.environ.get("AGENT_NAME", "openz")
 ROOM_NAME = os.environ.get("E2E_ROOM_NAME", f"e2e-pipeline-test-{os.getpid()}")
 
 FIXTURE_DIR = ROOT / "tests" / "fixtures" / "audio"

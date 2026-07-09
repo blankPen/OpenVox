@@ -6,7 +6,7 @@ These tests assert the public contract of ``_build_session``:
 * STT / TTS 仍是火山引擎
 * 未知 PIPELINE 必须抛 ValueError
 * qwen-realtime / volcengine.RealtimeModel 分支必须不存在
-* 配置从 ~/.openz/config.json 读取（不再用 .env / 环境变量）
+* 配置从 ~/.openvox/config.json 读取（不再用 .env / 环境变量）
 """
 from __future__ import annotations
 
@@ -31,18 +31,17 @@ def _make_fake_config() -> "Config":  # type: ignore[name-defined]  # noqa: F821
             "tts": {"app_id": "tts-app-id", "access_token": "tts-access-token"},
         },
         "livekit": {"agent_name": "test-agent"},
-        "bridge": {
-            "base_url": "http://127.0.0.1:9999/v1",
+        "hermes": {
+            "api_base": "http://127.0.0.1:9999/v1",
             "api_key": "test-api-key",
             "model": "test-model",
-            "livekit_room_name": "test-room",
         },
     })
 
 
 @pytest.fixture
 def fake_config(monkeypatch):
-    """Inject a fake Config into main so _build_session doesn't read ~/.openz/config.json."""
+    """Inject a fake Config into main so _build_session doesn't read ~/.openvox/config.json."""
     import main
     fake = _make_fake_config()
     monkeypatch.setattr(main, "_cfg", fake)
@@ -50,7 +49,7 @@ def fake_config(monkeypatch):
 
 
 def test_pipeline_uses_openai_llm(fake_config):
-    """pipeline 模式必须把 openai.LLM 构造出来，三个配置都来自 config。"""
+    """pipeline 模式必须把 openai.LLM 构造出来，三个配置都来自 hermes 段。"""
     import main
 
     with patch("livekit.plugins.openai.LLM") as mock_llm, \
@@ -65,7 +64,8 @@ def test_pipeline_uses_openai_llm(fake_config):
     assert kwargs["model"] == "test-model", kwargs
     assert kwargs["api_key"] == "test-api-key", kwargs
     assert kwargs["base_url"] == "http://127.0.0.1:9999/v1", kwargs
-    assert kwargs["extra_headers"]["X-LiveKit-Room"] == "test-room", kwargs
+    # 桥已删除，不再传 LiveKit header
+    assert "extra_headers" not in kwargs, kwargs
 
     # AgentSession 拿到的是 openai.LLM 返回的 mock 实例
     session_kwargs = mock_session.call_args.kwargs

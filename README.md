@@ -1,6 +1,6 @@
-# LiveKit × Volcengine 语音 Agent — 本地运行手册
+# OpenVox — Volcengine 语音 Agent 本地运行手册
 
-> 本目录是一个可在 macOS 上**本地跑通**的 LiveKit Agents worker，把 `livekit-plugins-volcengine`（来自 [di-osc/livekit-plugins-chinese](https://github.com/di-osc/livekit-plugins-chinese/tree/main/livekit-plugins/livekit-plugins-volcengine)）挂在本地 LiveKit Server 上。
+> **OpenVox** 是一个基于 LiveKit Agents 的语音 worker，对接火山引擎（Volcengine）的 STT / TTS，LLM 直连本地 Hermes OpenAI-兼容 api_server。把 `livekit-plugins-volcengine`（来自 [di-osc/livekit-plugins-chinese](https://github.com/di-osc/livekit-plugins-chinese/tree/main/livekit-plugins/livekit-plugins-volcengine)）挂在 LiveKit Server 上。
 >
 > 默认管线是 **Realtime E2E**（一条 WebSocket 直连火山引擎 dialogue 端点），也可一键切到 **STT+LLM+TTS pipeline**。
 
@@ -24,23 +24,23 @@
 ## 1. 初始化项目（首次）
 
 ```bash
-cd /Users/pz/workspace/livekit
+cd /Users/pz/workspace/openvox
 
 # 1) Python venv
 /opt/homebrew/bin/python3.11 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 
-# 2) 装依赖 + 火山引擎插件（从本地 vendor/ 源码 editable 安装，注意必须传 --no-deps）
+# 2) 装依赖 + 火山引擎插件（从本地 plugins/ 源码 editable 安装，注意必须传 --no-deps）
 pip install "livekit-agents[otel,silero,turn-detector]~=1.5" python-dotenv
-pip install -e ./vendor/volcengine-src/livekit-plugins/livekit-plugins-volcengine --no-deps
+pip install -e ./plugins/livekit-plugins-volcengine --no-deps
 
-# 3) 凭证（已写在 .env 里，不要 commit 真实凭证）
-cat .env
-#   LIVEKIT_URL=ws://localhost:7880
-#   LIVEKIT_API_KEY=devkey
-#   LIVEKIT_API_SECRET=secret
-#   VOLCENGINE_STT_APP_ID=1605412251  ...等等
+# 3) 凭证：从 ~/.openvox/config.json 读（schema 见 config.py 模块头注释）
+cat ~/.openvox/config.json
+#   livekit.url = wss://livekit.openz.top:7443
+#   livekit.api_key = openz
+#   livekit.agent_name = openvox
+#   volcengine.stt.app_id / access_token ...
 ```
 
 ---
@@ -62,7 +62,7 @@ dev 模式默认密钥是 `devkey` / `secret`，和 `.env` 里一致。
 ### 终端 B — Volcengine 语音 Agent Worker
 
 ```bash
-cd /Users/pz/workspace/livekit
+cd /Users/pz/workspace/openvox
 source .venv/bin/activate
 python main.py start
 # 看到 "registered worker" 后即就绪。
@@ -74,7 +74,7 @@ python main.py start
 
 ```bash
 # 创建一个 dispatch，把 agent 派到 demo 房间
-lk dispatch create --dev --room demo --agent-name volcengine-agent
+lk dispatch create --dev --room demo --agent-name openz
 ```
 
 让 alice 进同一个房间说话（三选一）：
@@ -87,17 +87,11 @@ lk dispatch create --dev --room demo --agent-name volcengine-agent
 
 ---
 
-## 3. 切换管线
+## 3. 当前管线
 
-**默认：`PIPELINE=realtime`**（Realtime E2E，最少依赖，**不需要 STT**）。
+当前唯一支持的管线是 `pipeline`（STT + LLM + TTS 三段式），由 `~/.openvox/config.json` 里的 `"pipeline": "pipeline"` 控制。LLM 直连 Hermes gateway 的 OpenAI 兼容 api_server（默认 :8642，配置在 `hermes.api_base`）。
 
-切到 STT + LLM + TTS 三段式：
-
-```bash
-PIPELINE=pipeline python main.py start
-```
-
-> 注意：这要求 1605412251 这个 AppID 在火山引擎控制台**开通了「流式语音识别 大模型」服务**，否则 STT WebSocket 会 403。Realtime 管线无此限制。
+> 注意：STT 段要求 1605412251 这个 AppID 在火山引擎控制台**开通了「流式语音识别 大模型」服务**，否则 STT WebSocket 会 403。
 
 ---
 
@@ -120,15 +114,19 @@ PIPELINE=pipeline python main.py start
 ## 5. 项目目录结构
 
 ```
-livekit/
+openvox/
 ├── main.py                                 # 入口：Agent + WorkerOptions
-├── .env                                    # 凭证（已 gitignore .local）
+├── config.py                               # 启动配置加载（读 ~/.openvox/config.json）
+├── pyproject.toml
 ├── .gitignore
 ├── CLAUDE.md                               # 给 Claude Code 实例看的架构/坑点摘要
 ├── README.md                               # 本文件：给人类看的操作手册
-├── vendor/
-│   └── volcengine-src/                     # 拉来的 di-osc/livekit-plugins-chinese 源码
-│       └── livekit-plugins/livekit-plugins-volcengine/
+├── scripts/
+│   ├── start.sh                            # 启动 worker
+│   └── run_tests.sh                        # 跑测试
+├── plugins/
+│   └── livekit-plugins-volcengine/         # vendored 火山引擎插件
+├── tests/
 └── .venv/                                  # python3.11 venv
 ```
 

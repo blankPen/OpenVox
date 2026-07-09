@@ -59,7 +59,7 @@
 ## 2. 目录布局
 
 ```
-/Users/pz/workspace/livekit/
+/Users/pz/workspace/openvox/
 ├── workspace/
 │   ├── extensions/
 │   │   ├── tools/
@@ -127,7 +127,7 @@ from livekit.agents import function_tool
 
 from ._sensitive import is_sensitive
 
-logger = logging.getLogger("volcengine-agent")
+logger = logging.getLogger("openvox")
 
 
 @function_tool()
@@ -237,7 +237,7 @@ LiveKit 把 tool_result 喂回 realtime 模型
 2. 启动 worker（realtime 模式）
 3. 准备测试文件：
    echo "hello world" > /tmp/fs_baseline_test.txt
-4. lk dispatch create --agent-name openz --room fs-baseline
+4. lk dispatch create --agent-name openvox --room fs-baseline
 5. 客户端语音："帮我读 /tmp/fs_baseline_test.txt 的内容"
 6. 验证回复包含 "hello world"
 ```
@@ -257,10 +257,10 @@ LiveKit 把 tool_result 喂回 realtime 模型
 worker 日志会同时出现：
 
 ```
-12:34:56.789 | INFO  | volcengine-agent | [fs] read_file(path='/Users/pz/.../main.py') → 1234c
-12:35:01.234 | WARN  | volcengine-agent | [fs] WRITE_OP write_file(path='/tmp/x.txt', mode='overwrite', size=42c)
-12:35:02.345 | WARN  | volcengine-agent | [fs] BASH_OP bash(cmd='pip install requests', timeout=30)
-12:35:05.678 | WARN  | volcengine-agent | [fs] SENSITIVE_PATH read_file(path='/etc/hosts')
+12:34:56.789 | INFO  | openvox | [fs] read_file(path='/Users/pz/.../main.py') → 1234c
+12:35:01.234 | WARN  | openvox | [fs] WRITE_OP write_file(path='/tmp/x.txt', mode='overwrite', size=42c)
+12:35:02.345 | WARN  | openvox | [fs] BASH_OP bash(cmd='pip install requests', timeout=30)
+12:35:05.678 | WARN  | openvox | [fs] SENSITIVE_PATH read_file(path='/etc/hosts')
 ```
 
 demo 时这一段日志能让操作员一眼看到 agent 在做什么。
@@ -290,7 +290,7 @@ demo 时这一段日志能让操作员一眼看到 agent 在做什么。
 
 ### 5.3 日志分级
 
-复用 `logger = logging.getLogger("volcengine-agent")`，按操作危险度分级：
+复用 `logger = logging.getLogger("openvox")`，按操作危险度分级：
 
 ```python
 # 普通读取 — INFO
@@ -396,7 +396,7 @@ assert json.loads(result) == ["a.txt", "b.txt"]
 
 ```
 1. worker 用 python main.py dev 起在后台
-2. lk dispatch create --agent-name openz --room fs-baseline
+2. lk dispatch create --agent-name openvox --room fs-baseline
 3. 通过 LiveKit SDK 加入房间
 4. 准备 echo "hello world" > /tmp/fs_baseline_test.txt
 5. 发送 TTS 文本"读 /tmp/fs_baseline_test.txt 的内容"

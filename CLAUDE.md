@@ -4,17 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概览
 
-这是一个对接 **Volcengine（火山引擎）** 语音服务的 LiveKit Agents worker。`main.py` 注册一个 `livekit-agents` worker，在派单到达时启动一个由火山引擎驱动的 `AgentSession`。支持两种会话变体，由环境变量 `PIPELINE` 切换：
+**OpenVox** 是一个对接 **Volcengine（火山引擎）** 语音服务的 LiveKit Agents worker。`main.py` 注册一个 `livekit-agents` worker，在派单到达时启动一个由火山引擎驱动的 `AgentSession`。当前唯一支持的会话变体是 `pipeline`（STT + LLM + TTS 三段式），由 config 段 `pipeline` 控制。
 
-- `realtime`（默认）：一条 WebSocket 直连火山引擎 dialogue 端点的端到端语音模型。
-- `pipeline`：分离的 STT + LLM + TTS 三段式。
+完整的人工操作手册（三终端启动、浏览器/CLI 客户端、故障排查表）在 `README.md`；本文件聚焦于读代码时容易漏掉的事实。
 
 完整的人工操作手册（三终端启动、浏览器/CLI 客户端、故障排查表）在 `README.md`；本文件聚焦于读代码时容易漏掉的事实。
 
 ## 目录结构（关键文件）
 
 - **`main.py`** — worker 入口，`VolcengineAgent`、`_build_session`、`_prewarm`，以及三处日志去重的 monkey-patch。
-- **`livekit.yaml`** — 本地 LiveKit server 配置（端口 7880，密钥 `openz` → secret 哈希）。被 `start-lan.sh` / `start-emu.sh` 挂载进容器；裸的 `livekit-server --dev` 模式使用硬编码的 `devkey/secret` 而忽略此文件。
+- **`livekit.yaml`** — 本地 LiveKit server 配置（端口 7880，密钥 `openvox` → secret 哈希）。被 `start-lan.sh` / `start-emu.sh` 挂载进容器；裸的 `livekit-server --dev` 模式使用硬编码的 `devkey/secret` 而忽略此文件。
 - **`Dockerfile`** + **`docker-compose.yml`** — 容器化的 worker。`LIVEKIT_URL` 被覆盖为 `ws://host.docker.internal:7880`，让容器能访问宿主机上的 LiveKit server（Docker Desktop / Docker for Mac）。
 - **`start.sh` / `start-lan.sh` / `start-emu.sh`** — 本地 LiveKit server 的快捷脚本：
   - `start.sh`：以 `--dev` 模式启动 `livekit-local` 容器并拉起 worker。
@@ -35,7 +34,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 切到 STT+LLM+TTS 管线 | `PIPELINE=pipeline python main.py start`（默认 `realtime`） |
 | 冒烟测试插件导入 | `python -c "from livekit.plugins import volcengine; print(volcengine.__all__)"` |
 | 构建并跑容器化 worker | `docker compose build && docker compose up` |
-| 把 agent 派到房间 | `lk dispatch create --dev --room demo --agent-name volcengine-agent` |
+| 把 agent 派到房间 | `lk dispatch create --dev --room demo --agent-name openvox` |
 | 给客户端生成 join token | `lk token create --dev --room demo --identity alice --join` |
 | 杀掉卡在 8081 的旧 worker | `lsof -ti:8081 \| xargs kill -9` |
 
@@ -66,12 +65,12 @@ vendored 插件一律用 keyword-only 参数。**不要**照搬 PyPI 上 `liveki
 - **`prewarm_fnc` 必须是模块级函数**，且签名是 `def _prewarm(proc): ...`。`lambda` 在 IPC 跨进程 pickle 时会抛 `PicklingError`。`main.py` 已经用模块级函数，保持这个签名。
 - **editable 安装必须加 `--no-deps`**。vendored 插件的 `pyproject.toml` 写死了 `livekit-agents==1.5.4`；不加 `--no-deps` 的话 pip 会把宿主环境的 `livekit-agents` 降到 1.5.4，把 `livekit-agents[otel,silero,turn-detector]~=1.5` 的 extras 全搞坏。`Dockerfile` 和本地 venv 都加了。
 - **8081 端口是 worker 的 IPC 端口**。崩溃的 worker 会让端口持续被占，下一次 `start` 报 `OSError: [Errno 48] address already in use`。`start.sh` 会自动 `lsof -ti:8081 | xargs kill -9`；如果绕过脚本启动，这一步要自己来。
-- **`lk dispatch` / worker 握手 401 的根因** — `--dev` 模式把密钥硬编码为 `devkey/secret`。如果 `.env` 里 `LIVEKIT_API_KEY/SECRET` 不一致（比如用的是 `livekit.yaml` 里的 `openz`），worker 签的 JWT server 验不过。两条路二选一：
+- **`lk dispatch` / worker 握手 401 的根因** — `--dev` 模式把密钥硬编码为 `devkey/secret`。如果 `.env` 里 `LIVEKIT_API_KEY/SECRET` 不一致（比如用的是 `livekit.yaml` 里的 `openvox`），worker 签的 JWT server 验不过。两条路二选一：
   - 跑裸的 `livekit-local` 容器加 `--dev --bind=0.0.0.0`，`.env` 写 `devkey/secret`；**或者**
   - 挂载 `livekit.yaml`、去掉 `--dev`（参考 `start-lan.sh` / `start-emu.sh`），让 server 用和 `.env` 一致的 `openz` 密钥。
 - **Mac 上的 Docker 网络** — `docker-compose.yml` 把 `LIVEKIT_URL` 覆盖成 `ws://host.docker.internal:7880`，让容器访问 **宿主机** 的 LiveKit server。如果 server 跑在共享网络的兄弟容器里，要换成服务名（`livekit-local:7880`）。compose 故意用默认 `bridge` 网络 —— 切到 `host` 会把 worker 内部的 8081 IPC 端口暴露到宿主机，并行跑多个 worker 就会撞端口。
 - **"我们装的是 1.2.9" 是个过时的说法**。vendored 插件的 `pyproject.toml` 钉了 1.5.4，但 `pip install -e ... --no-deps` 会跳过这个 pin，加上 dev/Docker 都用 `~=1.5`，实际装的是 1.5.x。代码里所有针对"我们在 1.2.9"做的分支都要更新；唯一仍然有效的 1.2.9 时代怪癖是 `RoomInputOptions` 走 `session.start()` 而不是 `__init__()`。
-- **`.env` 里的 `AGENT_NAME`** — 默认是 `volcengine-agent`，但当前 `.env` 设的是 `AGENT_NAME=openz`。`lk dispatch create --agent-name …` 必须和运行中的 worker 一致，否则派单会一直挂着。
+- **`~/.openvox/config.json` 里的 `livekit.agent_name`** — 默认是 `volcengine-agent`（livekit-agents 上游约定），但当前配置保持 `openz`（外部 app 还在用 `lk dispatch create --agent-name openz` 派单，改了 worker 收不到单）。等 app 切到新名字后再统一。`lk dispatch create --agent-name …` 必须和 worker 注册名一致，否则派单会一直挂着。
 - **测试** — `tests/e2e_generate_reply.py` 是基于旧的 `vendor/` 路径写的，import 就会失败。要么把 `sys.path.insert` 改成指向 `plugins/livekit-plugins-volcengine/livekit`，要么直接删掉；目前仓库里没有其他测试。
 
 ## 参考资料

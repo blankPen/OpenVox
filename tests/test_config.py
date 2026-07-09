@@ -48,8 +48,8 @@ def test_require_raises_for_partial_nested_missing():
 
 
 def test_require_returns_value_for_present_key():
-    cfg = Config({"bridge": {"model": "hermes-agent"}})
-    assert cfg.require("bridge.model") == "hermes-agent"
+    cfg = Config({"hermes": {"model": "hermes-agent"}})
+    assert cfg.require("hermes.model") == "hermes-agent"
 
 
 def test_load_from_file(tmp_path):
@@ -107,11 +107,11 @@ def test_reset_config_clears_cache(monkeypatch):
     set_config(fake)
     assert get_config() is fake
     reset_config()
-    # 缓存清掉后，get_config() 会读默认 ~/.openz/config.json。
-    # 用 monkeypatch 改 OPENZ_CONFIG 让它读一个临时文件，确认 reset 生效。
-    tmp = Path("/tmp/_openz_test_config.json")
+    # 缓存清掉后，get_config() 会读默认 ~/.openvox/config.json。
+    # 用 monkeypatch 改 OPENVOX_CONFIG 让它读一个临时文件，确认 reset 生效。
+    tmp = Path("/tmp/_openvox_test_config.json")
     tmp.write_text(json.dumps({"k": "from-tmp"}), encoding="utf-8")
-    monkeypatch.setenv("OPENZ_CONFIG", str(tmp))
+    monkeypatch.setenv("OPENVOX_CONFIG", str(tmp))
     try:
         cfg = get_config()
         assert cfg.require("k") == "from-tmp"
@@ -120,9 +120,9 @@ def test_reset_config_clears_cache(monkeypatch):
         reset_config()
 
 
-def test_default_path_is_openz_config(monkeypatch):
-    """没设 OPENZ_CONFIG 时默认读 ~/.openz/config.json。"""
-    monkeypatch.delenv("OPENZ_CONFIG", raising=False)
+def test_default_path_is_openvox_config(monkeypatch):
+    """没设 OPENVOX_CONFIG 时默认读 ~/.openvox/config.json。"""
+    monkeypatch.delenv("OPENVOX_CONFIG", raising=False)
     import config as cfg_module
-    expected = Path("~/.openz/config.json").expanduser()
+    expected = Path("~/.openvox/config.json").expanduser()
     assert cfg_module.CONFIG_PATH == expected

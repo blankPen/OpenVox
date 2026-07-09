@@ -2,7 +2,7 @@
 
 > 本文档梳理 `livekit-agents` 框架（当前版本 1.2.9）+ 火山引擎插件下的所有可扩展点，并给出首个方向（Function Tools）的最小可运行示例。
 
-- **项目**：`/Users/pz/workspace/livekit` —— LiveKit Agents worker，语音服务走火山引擎
+- **项目**：`/Users/pz/workspace/openvox` —— LiveKit Agents worker，语音服务走火山引擎
 - **当前 Agent**：`VolcengineAgent`，仅使用了 `instructions` + `on_enter greeting`，等于只发挥了框架约 1/10 的能力
 - **目标**：建立一份"想给 agent 加 X 能力时该往哪里动手"的索引
 

@@ -10,7 +10,7 @@
 
 ### 1.1 当前状态
 
-`/Users/pz/workspace/livekit` 是对接火山引擎（Volcengine）语音服务的 LiveKit Agents worker。`main.py` 中 `VolcengineAgent` 当前只使用了 `Agent` 基类的 `instructions` 和 `on_enter` 两个能力，约发挥出 `livekit-agents` 框架全部能力的 1/10。
+`/Users/pz/workspace/openvox` 是对接火山引擎（Volcengine）语音服务的 LiveKit Agents worker。`main.py` 中 `VolcengineAgent` 当前只使用了 `Agent` 基类的 `instructions` 和 `on_enter` 两个能力，约发挥出 `livekit-agents` 框架全部能力的 1/10。
 
 框架实际上已经支持 function tools、MCP、生命周期 hooks、ChatContext 动态注入、userdata、多 agent 编排等扩展点（详见 `docs/agent-capabilities-extension.md` 已有的 10 项扩展点清单），但本项目一个都没接。
 
@@ -34,7 +34,7 @@
 ## 2. 目录布局
 
 ```
-/Users/pz/workspace/livekit/
+/Users/pz/workspace/openvox/
 ├── main.py                     # 现有：worker 入口、log patch、session 工厂
 ├── workspace/                  # 新增：agent 资源根（git 跟踪）
 │   ├── persona/                # agent 级 prompt 注入（worker 启动时全量读）
@@ -391,7 +391,7 @@ Agent: "现在是 2026-07-04 14:32:10。"
 | 远程 MCP（HTTP/SSE）| v0.1 stdio only |
 | 多租户、RBAC、审计日志 | 单实例个人项目，YAGNI |
 | 改造 vendored 火山引擎插件 | 那是上游仓库议题 |
-| 把 `workspace/users/` 迁出项目目录到 `~/.openz/` | 用户最终拍板"先放项目目录"，v0.2 再考虑 |
+| 把 `workspace/users/` 迁出项目目录到 `~/.openvox/` | 用户最终拍板"先放项目目录"，v0.2 再考虑 |
 
 ---
 
@@ -399,8 +399,8 @@ Agent: "现在是 2026-07-04 14:32:10。"
 
 | 触发条件 | 迁移内容 |
 |---|---|
-| 多项目复用同一 agent | `workspace/` 整体 → `~/.openz/<agent-name>/`；`MemoryStore.__init__` 接受 base path 参数 |
-| 同一用户出现在多 agent | `users/<uid>/` 提到 `~/.openz/users/<uid>/`（跨 agent 共享）|
+| 多项目复用同一 agent | `workspace/` 整体 → `~/.openvox/<agent-name>/`；`MemoryStore.__init__` 接受 base path 参数 |
+| 同一用户出现在多 agent | `users/<uid>/` 提到 `~/.openvox/users/<uid>/`（跨 agent 共享）|
 | memory 体积膨胀 | 引入向量库 + 摘要，MEMORY.md 退化为索引 |
 | skill 出现越权风险 | skill frontmatter 加 `requires_tools: [bash, ...]`，`load_skill` 前置检查 |
 | bash tool 需要更强隔离 | 沙箱从 `subprocess` 切到容器（docker-in-docker 或 firecracker）|
@@ -413,7 +413,7 @@ Agent: "现在是 2026-07-04 14:32:10。"
 |---|---|
 | bash 白名单具体内容 | 实现 bash tool 时 |
 | MEMORY.md 上限多大、溢出怎么办 | 出现 LLM context 装不下时 |
-| 何时把 `workspace/users/` 迁到 `~/.openz/` | 多项目/备份需求出现时 |
+| 何时把 `workspace/users/` 迁到 `~/.openvox/` | 多项目/备份需求出现时 |
 | on_exit 摘要用哪个 LLM（realtime 还是另起）| 实施时 |
 | skill 是否需要权限声明 | 出现越权风险时 |
 | 多用户同房间的实际语义 | 真有第二用户接入时 |
