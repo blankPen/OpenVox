@@ -1,0 +1,14 @@
+# LiveKit Server 本地开发部署
+# 端口 7880 web / 7881 TCP / 7882 UDP
+
+services:
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: openvox-livekit
+    command: --dev
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "7882:7882"
+      - "7882:7882/udp"
+    restart: unless-stopped

@@ -1,0 +1,32 @@
+{
+  "claims_schema_version": "1.0",
+  "comment": "LiveKit Access Token standard claims. 生产 token 服务按此字段 mint JWT 推给客户端。",
+  "fields": {
+    "iss": "API_KEY",
+    "sub": "user-id-or-identity",
+    "exp": "unix-timestamp (24h default)",
+    "videoGrant": {
+      "room": "matched-against-shared-room-naming.md",
+      "roomJoin": true,
+      "canPublish": true,
+      "canSubscribe": true,
+      "canPublishData": true
+    },
+    "metadata": "{...populated-from-agent-protocol.md...}",
+    "sip": null,
+    "roomPreset": null
+  },
+  "example_for_dev_room": {
+    "iss": "devkey",
+    "sub": "pz",
+    "exp": 1792779000,
+    "videoGrant": {
+      "room": "dev-pz-20260723",
+      "roomJoin": true,
+      "canPublish": true,
+      "canSubscribe": true,
+      "canPublishData": true
+    },
+    "metadata": "{\"vox_version\":\"0.1.0\",\"client\":\"voice-client\",\"lang\":\"zh-CN\",\"session_mode\":\"voice\"}"
+  }
+}

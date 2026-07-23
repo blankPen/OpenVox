@@ -1,0 +1,53 @@
+version: "3"
+
+# OpenVox 主编排
+# 起步阶段只列 shell+docker 调用；后续 dev:e2e / dev:client 实施再补
+
+vars:
+  PROJECT_NAME: openvox
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  dev:infra:
+    desc: Start LiveKit Server (Docker)
+    dir: infra
+    cmds:
+      - docker compose up -d
+
+  dev:infra-down:
+    desc: Stop LiveKit Server
+    dir: infra
+    cmds:
+      - docker compose down
+
+  dev:agent:
+    desc: Start voice-agent worker (Python)
+    dir: apps/voice-agent
+    cmds:
+      - python main.py start
+
+  dev:client:
+    desc: Start Flutter voice-client
+    dir: apps/voice-client
+    cmds:
+      - flutter run
+
+  dev:up:
+    desc: 一键起 LiveKit + agent + 派单（不含 client）
+    cmds:
+      - task: dev:infra
+      - task: dev:agent
+
+  dev:down:
+    desc: Stop everything
+    cmds:
+      - task: dev:infra-down
+
+  lint:
+    desc: Lint all (TODO 实施阶段再细化)
+    cmds:
+      - echo "TODO: agent ruff + client flutter analyze"

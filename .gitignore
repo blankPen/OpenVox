@@ -1,0 +1,46 @@
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Python (apps/voice-agent)
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Flutter (apps/voice-client)
+.dart_tool/
+.flutter-plugins-dependencies
+.flutter-plugins
+.packages
+.pub-cache/
+.pub/
+build/
+ephox/
+*.iml
+.metadata
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+macos/Pods/
+macos/Flutter/ephemeral/
+android/.gradle/
+android/app/build/
+android/local.properties
+android/key.properties
+
+# LiveKit / OpenVox runtime
+.openvox/
+.openvox-backup-*/
+.claude-task-brief.md
+
+# Tooling tmp
+*.log
