@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+.claude/
+
+# build artifacts / docs / dev artifacts not needed at runtime
+CLAUDE.md
+README.md
+
+# No vendor/ tree anymore — the Volcengine plugin is vendored under
+# plugins/livekit-plugins-volcengine/ which IS needed at runtime.

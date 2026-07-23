@@ -1,0 +1,134 @@
+"""Tests for ``main._build_session`` — verify pipeline wiring.
+
+These tests assert the public contract of ``_build_session``:
+
+* pipeline 模式必须用 openai.LLM（指向 hermes api_server）
+* STT / TTS 仍是火山引擎
+* qwen-realtime / volcengine.RealtimeModel 分支必须不存在
+* 配置从 ~/.openvox/config.json 读取（不再用 .env / 环境变量）
+"""
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+
+MAIN_PATH = Path(__file__).resolve().parents[1] / "main.py"
+
+
+def _make_fake_config() -> "Config":  # type: ignore[name-defined]  # noqa: F821
+    """Build a Config object with values the tests assert against."""
+    from config import Config
+    return Config({
+        "volcengine": {
+            "stt": {"app_id": "stt-app-id", "access_token": "stt-access-token"},
+            "tts": {"app_id": "tts-app-id", "access_token": "tts-access-token"},
+        },
+        "livekit": {"agent_name": "test-agent"},
+        "hermes": {
+            "api_base": "http://127.0.0.1:9999/v1",
+            "api_key": "test-api-key",
+            "model": "test-model",
+        },
+    })
+
+
+@pytest.fixture
+def fake_config(monkeypatch):
+    """Inject a fake Config into main so _build_session doesn't read ~/.openvox/config.json."""
+    import main
+    fake = _make_fake_config()
+    monkeypatch.setattr(main, "_cfg", fake)
+    return fake
+
+
+def test_pipeline_uses_openai_llm(fake_config):
+    """pipeline 模式必须把 openai.LLM 构造出来，三个配置都来自 hermes 段。"""
+    import main
+
+    with patch("livekit.plugins.openai.LLM") as mock_llm, \
+         patch("livekit.plugins.volcengine.STT") as mock_stt, \
+         patch("livekit.plugins.volcengine.TTS") as mock_tts, \
+         patch("main.AgentSession") as mock_session:
+        main._build_session()
+
+    # 必须真调 openai.LLM(...) 一次
+    mock_llm.assert_called_once()
+    kwargs = mock_llm.call_args.kwargs
+    assert kwargs["model"] == "test-model", kwargs
+    assert kwargs["api_key"] == "test-api-key", kwargs
+    assert kwargs["base_url"] == "http://127.0.0.1:9999/v1", kwargs
+    # 桥已删除，不再传 LiveKit header
+    assert "extra_headers" not in kwargs, kwargs
+
+    # AgentSession 拿到的是 openai.LLM 返回的 mock 实例
+    session_kwargs = mock_session.call_args.kwargs
+    assert session_kwargs["llm"] is mock_llm.return_value
+
+
+def test_pipeline_uses_volcengine_stt_tts(fake_config):
+    """pipeline 模式 STT / TTS 仍用火山引擎插件。"""
+    import main
+
+    with patch("livekit.plugins.openai.LLM"), \
+         patch("livekit.plugins.volcengine.STT") as mock_stt, \
+         patch("livekit.plugins.volcengine.TTS") as mock_tts, \
+         patch("main.AgentSession"):
+        main._build_session()
+
+    # 必须真调 volcengine.STT / volcengine.TTS
+    mock_stt.assert_called_once()
+    mock_tts.assert_called_once()
+    stt_kwargs = mock_stt.call_args.kwargs
+    assert stt_kwargs["app_id"] == "stt-app-id", stt_kwargs
+    assert stt_kwargs["access_token"] == "stt-access-token", stt_kwargs
+    tts_kwargs = mock_tts.call_args.kwargs
+    assert tts_kwargs["app_id"] == "tts-app-id", tts_kwargs
+    assert tts_kwargs["access_token"] == "tts-access-token", tts_kwargs
+
+
+def test_qwen_realtime_branch_removed():
+    """main.py 不能再 import 或引用 livekit.plugins.qwen。"""
+    src = MAIN_PATH.read_text(encoding="utf-8")
+    # 出现任何 `qwen` 字面引用都算违规
+    assert "qwen" not in src.lower(), (
+        "main.py 仍含 qwen 引用 — qwen-realtime 分支必须完全移除"
+    )
+
+
+def test_volcengine_realtime_branch_removed():
+    """main.py 不能再引用 volcengine.RealtimeModel 或 RealtimeSession。
+
+    realtime 端到端模式已彻底从 OpenVox 中移除；vendored 插件里的
+    RealtimeModel/RealtimeSession 类仍在但本项目不应再 import 或构造。
+    """
+    src = MAIN_PATH.read_text(encoding="utf-8")
+    assert "RealtimeModel" not in src, (
+        "main.py 仍引用 RealtimeModel — realtime 分支必须删除"
+    )
+    assert "RealtimeSession" not in src, (
+        "main.py 仍引用 RealtimeSession — realtime 分支必须删除"
+    )
+    assert "VOLCENGINE_REALTIME" not in src, (
+        "main.py 仍引用 VOLCENGINE_REALTIME_* 环境变量"
+    )
+
+
+def test_does_not_load_dotenv():
+    """main.py 必须不再依赖 .env / dotenv。"""
+    src = MAIN_PATH.read_text(encoding="utf-8")
+    assert "load_dotenv" not in src, "main.py 仍在调 load_dotenv"
+    assert "dotenv" not in src, "main.py 仍 import 了 dotenv"
+
+
+def test_no_pipeline_module_constant():
+    """main.py 不应再有 ``PIPELINE`` 模块级常量 — pipeline 是唯一模式，没有切换开关。"""
+    src = MAIN_PATH.read_text(encoding="utf-8")
+    # 模块级赋值（仅看 ^ 缩进级别 0 的 PIPELINE = ... / PIPELINE: str = ...）
+    import re
+    top_level_pipeline = re.search(r"^PIPELINE\s*[:=]", src, re.MULTILINE)
+    assert top_level_pipeline is None, (
+        "main.py 仍有模块级 PIPELINE 常量 — pipeline 是唯一模式，无需切换开关"
+    )
