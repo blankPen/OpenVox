@@ -44,3 +44,12 @@ android/key.properties
 
 # Tooling tmp
 *.log
+
+# === Monorepo 落地时被发现的产物（2026-07-23 清理）===
+# iOS / macOS CocoaPods（每台机器 pod install 重建，不要入仓）
+# Already covered above as ios/Pods/ and macos/Pods/; the **/ variants are
+# belt-and-suspenders for any sibling app that has its own Pods/ tree.
+**/Pods/
+
+# Claude Code worktree 残留（开发机本地临时，不入仓）
+**/.claude/worktrees/
