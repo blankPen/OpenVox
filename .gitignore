@@ -46,10 +46,66 @@ android/key.properties
 *.log
 
 # === Monorepo 落地时被发现的产物（2026-07-23 清理）===
-# iOS / macOS CocoaPods（每台机器 pod install 重建，不要入仓）
-# Already covered above as ios/Pods/ and macos/Pods/; the **/ variants are
-# belt-and-suspenders for any sibling app that has its own Pods/ tree.
 **/Pods/
-
-# Claude Code worktree 残留（开发机本地临时，不入仓）
 **/.claude/worktrees/
+
+# === 通用编译 / 构建产物（2026-07-23 追加，覆盖任意外部子目录）===
+# 顶层兜底：apps/voice-client/.gitignore 里有些规则，但 monorepo 任意新 app
+# 应当自动遵守同样的 ignore 规则，不依赖每个 app 子目录写自己的 .gitignore。
+
+# Flutter / Dart
+**/build/
+**/.dart_tool/
+**/.flutter-plugins-dependencies
+**/.flutter-plugins
+**/.packages
+**/ephox/
+**/.metadata
+
+# Python / Python 测试
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.tox/
+**/.cache/
+
+# Gradle / Android
+**/.gradle/
+**/gradlew
+**/gradlew.bat
+**/gradle-wrapper.jar
+
+# CocoaPods / iOS / Xcode
+**/Pods/
+**/*.xcuserdatad/
+**/*.xcuserstate
+**/*.xcworkspace/xcuserdata/
+**/DerivedData/
+
+# CMake / C++ / 通用 native 编译产物
+**/*.o
+**/*.obj
+**/*.so
+**/*.dylib
+**/*.a
+**/*.lib
+**/CMakeFiles/
+**/cmake_install.cmake
+**/CMakeCache.txt
+**/CMakeUserPresets.json
+
+# Rust（预防性，未来用）
+**/target/
+
+# Node（预防性，未来用）
+**/node_modules/
+**/.next/
+**/.nuxt/
+
+# 故意 NOT ignored（业界主流，应 commit 入仓）：
+# - Podfile.lock      ← iOS 团队成员安装同一版本
+# - pubspec.lock      ← Flutter Dart 依赖锁定
+# - requirements.txt  ← Python 依赖锁定（如果有）
