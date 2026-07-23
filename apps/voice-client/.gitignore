@@ -4,8 +4,9 @@
 .dart_tool/
 .packages
 build/
-# If you're building an application, you may want to check-in your pubspec.lock
-pubspec.lock
+# pubspec.lock is intentionally tracked (unified monorepo lock strategy 2026-07-23).
+# We commit pubspec.lock alongside Podfile.lock for reproducible builds across apps/.
+# pubspec.lock
 
 # Directory created by dartdoc
 # If you don't generate documentation locally you can remove this line.
