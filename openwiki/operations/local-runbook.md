@@ -1,29 +1,29 @@
 ---
 type: Runbook
-title: OpenVox Local Runbook
-description: Operator-facing guide to starting, dispatching, and troubleshooting the OpenVox worker locally.
-tags: [operations, runbook, troubleshooting, livekit]
+title: OpenVox 本地 Runbook
+description: 运维视角的 OpenVox worker 启动、派单、故障排查手册。
+tags: [operations, runbook, troubleshooting, livekit, dispatch]
 ---
 
-# Local Runbook
+# 本地 Runbook
 
-This page is the operator-facing counterpart to the architecture pages. It assumes `~/.openvox/config.json` already exists (see [Configuration → Config loader](../configuration/config-loader.md) for the schema) and that the developer venv at `.venv/bin/python` exists.
+本页是 [架构页](../architecture/overview.md) 的运维侧对位。前提:`~/.openvox/config.json` 已存在(schema 见 [Config loader](../configuration/config-loader.md)),且 `.venv/bin/python` 已就绪。
 
-## Three-terminal start
+## 三终端启动
 
 ```mermaid
 flowchart TD
-    A[Terminal A: LiveKit server] --> B[Terminal B: OpenVox worker]
-    B --> C[Terminal C: dispatch + client]
+    A[终端 A:LiveKit server] --> B[终端 B:OpenVox worker]
+    B --> C[终端 C:派单 + 客户端]
     A -- docker start voice-assistant-livekit-1 --> A
-    B -- ./scripts/start.sh --> B2[python main.py start in background]
-    C -- lk dispatch create --room demo --agent-name openz --> Server[LiveKit routes job to worker]
+    B -- ./scripts/start.sh --> B2[后台 python main.py start]
+    C -- lk dispatch create --room demo --agent-name openz --> Server[LiveKit 派单给 worker]
     Server --> B
 ```
 
-### Terminal A — LiveKit server
+### 终端 A — LiveKit server
 
-A Docker container (`voice-assistant-livekit-1`) is already expected to be running on the macOS dev machine. If it is not:
+macOS 开发机上应该已经有 Docker 容器 `voice-assistant-livekit-1` 在跑。如果没有:
 
 ```bash
 docker run -d --name local-livekit --restart=always \
@@ -31,130 +31,130 @@ docker run -d --name local-livekit --restart=always \
   livekit/livekit-server:latest --dev
 ```
 
-The `--dev` flag hard-codes `devkey` / `secret` as the API key/secret. If your `~/.openvox/config.json` uses a non-`devkey`/`secret` pair, the worker handshake will 401.
+`--dev` 把 API key/secret 硬编码为 `devkey` / `secret`。如果你的 `~/.openvox/config.json` 不是 `devkey` / `secret` 配对,worker 握手会 401。
 
-### Terminal B — OpenVox worker
+### 终端 B — OpenVox worker
 
 ```bash
 cd <repo-root>
 source .venv/bin/activate
-./scripts/start.sh           # background, logs to /tmp/livekit-worker.log
-# or:
-./scripts/start.sh fg        # foreground (Ctrl-C to stop)
-# or:
-./scripts/start.sh status    # last 15 log lines + pid
-./scripts/start.sh stop      # kill any process on port 8081
+./apps/voice-agent/scripts/start.sh            # 后台,日志写到 /tmp/livekit-worker.log
+# 或:
+./apps/voice-agent/scripts/start.sh fg         # 前台(Ctrl-C 停)
+# 或:
+./apps/voice-agent/scripts/start.sh status     # 看 pid + 最近 15 行日志
+./apps/voice-agent/scripts/start.sh stop       # 杀掉任何占用 8081 的进程
 ```
 
-Internally `scripts/start.sh`:
+`scripts/start.sh` 内部做的事:
 
-1. Resolves `PY` from `.venv/bin/python`, falling back to `python3` / `python`.
-2. Verifies `$OPENVOX_CONFIG` (default `~/.openvox/config.json`) exists and parses as JSON.
-3. Exports `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` from the `livekit.*` section so the LiveKit SDK's `os.environ` lookup succeeds.
-4. In `start` mode, runs `lsof -ti:8081 | xargs kill -9` (stale worker IPC port), then launches `python main.py start > $LOG 2>&1 &` and waits 5s to confirm the port is open.
+1. 探测 `PY`:优先 `.venv/bin/python`,回退 `python3` / `python`。
+2. 校验 `$OPENVOX_CONFIG`(默认 `~/.openvox/config.json`)存在且能解析为 JSON。
+3. 从 `livekit.*` 段导出 `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET`,让 LiveKit SDK 走 `os.environ` 查找时能拿到。
+4. `start` 模式先 `lsof -ti:8081 | xargs kill -9`(清理残留 worker IPC 端口),再 `python main.py start > $LOG 2>&1 &` 启动并 sleep 5 秒确认端口起来了。
 
-### Terminal C — dispatch + client
+### 终端 C — 派单 + 客户端
 
 ```bash
-# Send the agent to "demo" room
+# 把 agent 派到 demo 房间
 lk dispatch create --dev --room demo --agent-name openz
 
-# Generate a join token for a client identity
+# 给客户端身份生成 join token
 lk token create --dev --room demo --identity alice --join
 
-# Option 1 — terminal test, zero dependencies
+# 选项 1 — 终端零依赖冒烟
 lk room join demo --identity alice --dev \
   --publish hello.ogg --auto-subscribe --exit-after-publish
 
-# Option 2 — browser
-ngrok http 7880                                # expose wss URL
-# paste the wss URL into https://meet.livekit.io/custom
+# 选项 2 — 浏览器
+ngrok http 7880                                # 暴露 wss URL
+# 把 wss URL 粘进 https://meet.livekit.io/custom
 
-# Option 3 — local React playground
+# 选项 3 — 本地 React playground
 git clone https://github.com/livekit/agents-playground
-# set LIVEKIT_URL/API_KEY/SECRET in its .env, run
+# 在它 .env 里写 LIVEKIT_URL / API_KEY / SECRET,然后启动
 ```
 
-The dispatch agent name **must** match `livekit.agent_name` in the config (currently `openz`); see [Configuration → Config loader](../configuration/config-loader.md).
+派单的 `--agent-name` **必须**等于 config 里的 `livekit.agent_name`(目前 `openz`);详见 [Config loader](../configuration/config-loader.md)。
 
-## Direct commands (without scripts)
+## 直接命令(跳过脚本)
 
 ```bash
-# Foreground dev mode (interactive)
+# 前台 dev 模式(交互)
 python main.py dev
 
-# Console mode (terminal <-> agent chat)
+# console 模式(终端 <-> agent 文字对话)
 python main.py console
 
-# Smoke-test that the volcengine plugin imports cleanly
+# 冒烟:volcengine 插件能否干净 import
 python -c "from livekit.plugins import volcengine; print(volcengine.__all__)"
 
-# After changing the plugin source, re-install editable
-pip install -e ./plugins/livekit-plugins-volcengine --no-deps
+# 改完插件源码后重新 editable 安装
+pip install -e ./apps/voice-agent/plugins/livekit-plugins-volcengine --no-deps
 ```
 
-## IPC port 8081
+## IPC 端口 8081
 
-The worker spawns one child process per dispatched job and uses port `8081` as the IPC channel between the supervisor and job workers. Crashed jobs sometimes leave the port held, in which case the next `start` reports:
+Worker 给每个派单 job 起一个子进程,用 8081 作为 supervisor ↔ job worker 之间的 IPC 通道。Job 崩溃时端口偶尔会被残留,下一次 `start` 会报:
 
 ```
 OSError: [Errno 48] address already in use
 ```
 
-`scripts/start.sh` handles this automatically. If you bypass the script, run:
+`scripts/start.sh` 自动处理这一步。如果绕开脚本自己跑,记得:
 
 ```bash
 lsof -ti:8081 | xargs kill -9
 ```
 
-`docker-compose.yml` uses the default `bridge` network rather than `host` specifically to keep `8081` off the host (a `host` network would let multiple workers collide).
+`docker-compose.yml` 用默认 `bridge` 网络而不是 `host`,目的就是不让 8081 暴露到宿主机(`host` 网络会让多 worker 撞端口)。
 
-## LiveKit credential mismatch (401 handshake)
+## LiveKit 凭证不匹配(401 握手)
 
-The LiveKit server's `--dev` mode hard-codes `devkey` / `secret`. If `~/.openvox/config.json` carries a different pair (e.g. `openz` / `openz-secret` from `livekit.yaml`), the JWT the worker signs will be rejected:
+`livekit-server --dev` 把 `devkey` / `secret` 硬编码。如果 `~/.openvox/config.json` 用别的配对(比如 `livekit.yaml` 里的 `openz` / `openz-secret`),worker 签的 JWT 会被 server 拒:
 
 ```
 WSServerHandshakeError 401
 ```
 
-Two options:
+两条路二选一:
 
-- Run a bare `livekit-local` container with `--dev --bind=0.0.0.0` and set the config creds to `devkey` / `secret`.
-- Mount `livekit.yaml`, drop `--dev`, and align `.env` / config with the server's keypair. The repo's `CLAUDE.md` references `start-lan.sh` and `start-emu.sh` for these modes (those scripts are not in the current worktree — see [Quickstart → Backlog](../quickstart.md)).
+- 起一个裸 `livekit-local` 容器加 `--dev --bind=0.0.0.0`,config 凭证用 `devkey` / `secret`。
+- 挂 `livekit.yaml`、去掉 `--dev`,让 `.env` / config 与 server 实际配对一致。仓库的 `apps/voice-agent/CLAUDE.md` 提到 `start-lan.sh` / `start-emu.sh` 用于这两种模式 —— 当前 worktree 里没提交,见 [Quickstart → Backlog](../quickstart.md)。
 
-## Troubleshooting table
+## 故障排查表
 
-| Symptom | Likely cause | Fix |
-|---------|--------------|-----|
-| `ValueError: api_key is required` at worker boot | `volcengine.*.app_id` / `access_token` missing from config | `cat ~/.openvox/config.json`; fill in `volcengine.stt.*` and `volcengine.tts.*`. |
-| `PicklingError: Can't pickle <lambda>` | `prewarm_fnc` is a lambda | Use a module-level function with signature `def _prewarm(proc): ...`. The default in `main.py` already does this. |
-| `prewarm_fnc() takes 0 positional arguments but 1 was given` | `prewarm_fnc` signature is missing the `proc` arg | Add `proc` as the only positional parameter. |
-| `OSError: address already in use` on port 8081 | previous worker not cleaned up | `lsof -ti:8081 \| xargs kill -9` then `./scripts/start.sh`. |
-| `WSServerHandshakeError 401` | API key/secret mismatch with LiveKit server | Make `.env` / config creds match what the server uses (`devkey` / `secret` in `--dev`). |
-| `lk dispatch create: agent-name is required` | worker has no `agent_name` set | `livekit.agent_name` missing from config. |
-| `lk token create: failed to fetch` | LiveKit server not reachable on `LIVEKIT_URL` | `curl http://localhost:7880/` should return 200; check the container. |
-| Hermes api_server responds `400 No user message found in messages` on the very first reply | `generate_reply()` was called without `user_input` | Already fixed in `main.py` (`on_enter` passes `user_input="打招呼"`); see [Integrations → Hermes LLM](../integrations/hermes-llm.md). |
-| Worker log shows `exception was never retrieved` on disconnect | STT `recv_task` raised `CancelledError` into a `_GatheringFuture` nobody awaits | Already fixed by `_patched_stt_run` in `main.py` (top of file). |
-| STT 403 from Volcengine | AppID does not have "流式语音识别 大模型" service enabled in Volcengine console | Enable the service at <https://console.volcengine.com/voice/app>. |
-| Tests fail with `Address already in use` for `livekit_server` (only in e2e) | another test or worker is bound | Stop any running worker (`./scripts/start.sh stop`) and any other LiveKit server. |
+| 症状 | 原因 | 修法 |
+|------|------|------|
+| 启动 worker 时 `ValueError: api_key is required` | config 里 `volcengine.*.app_id` / `access_token` 缺失 | `cat ~/.openvox/config.json`;补 `volcengine.stt.*` 和 `volcengine.tts.*` |
+| `PicklingError: Can't pickle <lambda>` | `prewarm_fnc` 是 lambda | 用模块级函数,签名 `def _prewarm(proc): ...`。`main.py` 默认就是 |
+| `prewarm_fnc() takes 0 positional arguments but 1 was given` | `prewarm_fnc` 签名缺 `proc` | 加 `proc` 作为唯一位置参数 |
+| 端口 8081 `OSError: address already in use` | 之前的 worker 没清理 | `lsof -ti:8081 \| xargs kill -9` 后再 `./scripts/start.sh` |
+| `WSServerHandshakeError 401` | API key/secret 与 LiveKit server 不一致 | 让 `.env` / config 凭证与 server 实际一致(`--dev` 下是 `devkey` / `secret`) |
+| `lk dispatch create: agent-name is required` | worker 没设 `agent_name` | config 缺 `livekit.agent_name` |
+| `lk token create: failed to fetch` | `LIVEKIT_URL` 不通 / server 没起 | `curl http://localhost:7880/` 应该返回 200;检查容器 |
+| 第一次回复时 Hermes api_server 返回 `400 No user message found in messages` | `generate_reply()` 没传 `user_input` | `main.py` 已修(`on_enter` 传 `user_input="打招呼"`) |
+| 断开时 worker 日志刷 `exception was never retrieved` | STT `recv_task` 在 `_GatheringFuture` 里抛 `CancelledError` 没人 await | `main.py` 顶部 `_patched_stt_run` 已修 |
+| Volcengine STT 返回 403 | AppID 没在控制台开通「流式语音识别 大模型」 | 去 <https://console.volcengine.com/voice/app> 开通 |
+| e2e 测试报 `Address already in use` for `livekit_server` | 有别的 test / worker 占着 | 停掉运行中的 worker(`./scripts/start.sh stop`)和任何其他 LiveKit server |
 
-## Tests
+## 测试
 
-`scripts/run_tests.sh` accepts `unit`, `e2e`, or `full` (default `unit`):
+`scripts/run_tests.sh` 接 `unit` / `e2e` / `full`(默认 `unit`):
 
 ```bash
-./scripts/run_tests.sh unit   # all tests/, no LiveKit required
-./scripts/run_tests.sh e2e    # tests/e2e_pipeline.py only (needs LiveKit server + worker)
-./scripts/run_tests.sh full   # both
+./apps/voice-agent/scripts/run_tests.sh unit   # tests/ 下全部单元测试,不需要 LiveKit
+./apps/voice-agent/scripts/run_tests.sh e2e    # 只跑 tests/e2e_pipeline.py,需要 LiveKit server + worker
+./apps/voice-agent/scripts/run_tests.sh full   # 都跑
 ```
 
-The `e2e` mode requires `.env` (which is **not** used by the worker itself — only by the test bootstrap in `tests/e2e_pipeline.py` to set `LIVEKIT_*` for `lk` CLI calls and the LiveKit Python SDK). See [Testing → Overview](../testing/overview.md).
+`e2e` 模式需要 `.env`(worker 本身**不读** `.env`,但 `tests/e2e_pipeline.py` 里的 bootstrap 用 `.env` 给 `lk` CLI 调用和 LiveKit Python SDK 设置 `LIVEKIT_*`)。
 
 ## Source anchors
 
-- `README.md` (Chinese operator manual; the source of most of the above table)
-- `CLAUDE.md` lines 26–69 (concise command reference + pitfalls)
-- `scripts/start.sh` lines 11–53, 59–123
-- `scripts/run_tests.sh` lines 30–73
-- `pyproject.toml` `[tool.pytest.ini_options]` (pythonpath = ["."])
-- `.gitignore` lines 8–27 (excludes `workspace/users/*`, `workspace/sandbox/*`, `workspace/extensions/mcp/*.local.json` — runtime-only directories not present in this worktree)
+- `apps/voice-agent/README.md`(中文操作手册;上面这张表的主要来源)
+- `apps/voice-agent/CLAUDE.md` 行 26–69(精炼命令参考 + 坑点)
+- `apps/voice-agent/scripts/start.sh` 行 11–53、59–123
+- `apps/voice-agent/scripts/run_tests.sh` 行 30–73
+- `apps/voice-agent/pyproject.toml` `[tool.pytest.ini_options]`(`pythonpath = ["."]`)
+- `apps/voice-agent/.gitignore` 行 8–27(排除 `workspace/users/*`、`workspace/sandbox/*`、`workspace/extensions/mcp/*.local.json` 等运行时目录)

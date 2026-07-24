@@ -1,59 +1,59 @@
 ---
 type: Integration
-title: Vendored livekit-plugins-volcengine
-description: How OpenVox embeds and patches the Volcengine STT/TTS/LLM/Realtime plugin, and the kwarg contract.
-tags: [volcengine, plugin, vendored]
+title: Vendored `livekit-plugins-volcengine`(中文)
+description: OpenVox 如何嵌入并打补丁 Volcengine STT/TTS/LLM/Realtime 插件,以及 kwarg 契约。
+tags: [volcengine, plugin, vendored, stt, tts, llm]
 ---
 
 # Vendored `livekit-plugins-volcengine`
 
-OpenVox ships a vendored copy of [`di-osc/livekit-plugins-chinese`](https://github.com/di-osc/livekit-plugins-chinese/tree/main/livekit-plugins/livekit-plugins-volcengine) under `plugins/livekit-plugins-volcengine/`. It is installed editable with `--no-deps` so that the project's own `pyproject.toml` pin (`livekit-agents[otel,silero,turn-detector]~=1.5`) is not downgraded to the plugin's hard pin (`livekit-agents==1.5.4`).
+OpenVox 在 `apps/voice-agent/plugins/livekit-plugins-volcengine/` 下面 ship 了一份 [`di-osc/livekit-plugins-chinese`](https://github.com/di-osc/livekit-plugins-chinese/tree/main/livekit-plugins/livekit-plugins-volcinese) 的 vendored 副本。安装方式是 `pip install -e ... --no-deps`,这样仓库根 `pyproject.toml` 钉的 `livekit-agents[otel,silero,turn-detector]~=1.5` 就不会被 vendored 插件里 hard-pin 的 `livekit-agents==1.5.4` 覆盖。
 
-## Why vendored and not PyPI
+## 为什么要 vendored 而不上 PyPI
 
-- PyPI's `livekit-plugins-volcengine==1.3.0` uses positional / cluster parameters that conflict with this vendored copy. Installing both would lead to two `livekit.plugins.volcengine` modules being loaded depending on sys.path order.
-- The vendored version uses keyword-only kwargs (`app_id=`, `access_token=`, `model=`, `api_key=`) that match what `main.py` calls; the PyPI version predates that.
-- The vendored plugin is patched in two places (see below). Centralising it locally makes the patches obvious.
+- PyPI 上的 `livekit-plugins-volcengine==1.3.0` 用了位置参数 / `cluster=` 参数,与 vendored 这份冲突。两个一起装会因为 `sys.path` 顺序问题出现两份 `livekit.plugins.volcengine` 模块。
+- Vendored 版用 keyword-only kwargs(`app_id=`、`access_token=`、`model=`、`api_key=`),与 `main.py` 的调用点对齐;PyPI 版早于这个约定。
+- Vendored 插件在两个地方被 monkey-patch(见下文)。本地集中化让 patch 一目了然。
 
-## Install
+## 安装
 
 ```bash
-pip install -e ./plugins/livekit-plugins-volcengine --no-deps
+pip install -e ./apps/voice-agent/plugins/livekit-plugins-volcengine --no-deps
 ```
 
-The `--no-deps` is **mandatory**. The vendored `pyproject.toml` pins `livekit-agents==1.5.4`, and pip would otherwise downgrade the host venv to 1.5.4 and break the `[otel,silero,turn-detector]` extras required by `pyproject.toml` at the repo root.
+`--no-deps` **必须**带。Vendored `pyproject.toml` 钉了 `livekit-agents==1.5.4`,如果不带 `--no-deps`,pip 会把宿主 venv 降到 1.5.4,搞坏根 `pyproject.toml` 里要求的 `[otel,silero,turn-detector]` extras。
 
-## Surface used by OpenVox
+## OpenVox 用到的插件面
 
-`main.py` only uses three of the five exports in `plugins/livekit-plugins-volcengine/livekit/plugins/volcengine/__init__.py`:
+`main.py` 只用 `plugins/livekit-plugins-volcengine/livekit/plugins/volcengine/__init__.py` 里 5 个 export 中的 3 个:
 
-| Class | Module | Constructor kwargs (in OpenVox) |
-|-------|--------|----------------------------------|
-| `STT` | `stt.py` | `app_id=`, `access_token=` |
-| `TTS` | `tts.py` | `app_id=`, `access_token=` |
-| `LLM` | `llm.py` | (not used by OpenVox — see [Integrations → Hermes LLM](./hermes-llm.md)) |
-| `RealtimeModel` | `realtime.py` | (not used — `tests/test_main_build_session.py::test_volcengine_realtime_branch_removed` enforces absence) |
+| 类 | 模块 | OpenVox 传入的构造参数 |
+|----|------|------------------------|
+| `STT` | `stt.py` | `app_id=`、`access_token=` |
+| `TTS` | `tts.py` | `app_id=`、`access_token=` |
+| `LLM` | `llm.py` | (未使用 —— 见下方"为什么不用 `volcengine.LLM`") |
+| `RealtimeModel` | `realtime.py` | (未使用 —— `tests/test_main_build_session.py::test_volcengine_realtime_branch_removed` 锁住) |
 
-### `STT` — streaming speech recognition
+### `STT` — 流式语音识别
 
-`plugins/livekit-plugins-volcengine/livekit/plugins/volcengine/stt.py` defines `STTOptions` with the protocol fields needed for Volcengine's WebSocket `/api/v3/sauc/bigmodel` interface:
+`plugins/livekit-plugins-volcengine/livekit/plugins/volcengine/stt.py` 里 `STTOptions` 给出对接 Volcengine WebSocket `/api/v3/sauc/bigmodel` 接口的字段:
 
-- Default `base_url = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel"`
-- Default `format = "pcm"`, `sample_rate = 16000`, `bits = 16`, `num_channels = 1`, `language = "zh-CN"`
-- `model_name = "bigmodel"`, `result_type = "single"`, `enable_punc = True`
-- Optional: `enable_itn`, `enable_ddc`, `show_utterance`, `vad_segment_duration`, etc.
+- 默认 `base_url = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel"`
+- 默认 `format = "pcm"`、`sample_rate = 16000`、`bits = 16`、`num_channels = 1`、`language = "zh-CN"`
+- `model_name = "bigmodel"`、`result_type = "single"`、`enable_punc = True`
+- 可选:`enable_itn`、`enable_ddc`、`show_utterance`、`vad_segment_duration` 等
 
-OpenVox passes **only** `app_id` + `access_token` from the config; everything else uses the defaults. See [Configuration → Config loader](../configuration/config-loader.md) for the `volcengine.stt.*` schema.
+OpenVox 只从 config 传 `app_id` + `access_token`,其余走默认。`volcengine.stt.*` schema 见 [Config loader](../configuration/config-loader.md)。
 
-### `TTS` — chunked HTTP synthesis
+### `TTS` — 分块 HTTP 合成
 
-`plugins/livekit-plugins-volcengine/livekit/plugins/volcengine/tts.py` calls Volcengine's `/api/v3/tts/unidirectional` chunked HTTP endpoint:
+`plugins/livekit-plugins-volcengine/livekit/plugins/volcengine/tts.py` 调 Volcengine `/api/v3/tts/unidirectional` chunked HTTP 端点:
 
-- Default `base_url = "https://openspeech.bytedance.com"`
-- Default `voice = "zh_female_xiaohe_uranus_bigtts"`, `resource_id = "seed-tts-2.0"`
-- Default `sample_rate = 24000`, `encoding = "pcm"`, `speed/volume/pitch = 1.0`
+- 默认 `base_url = "https://openspeech.bytedance.com"`
+- 默认 `voice = "zh_female_xiaohe_uranus_bigtts"`、`resource_id = "seed-tts-2.0"`
+- 默认 `sample_rate = 24000`、`encoding = "pcm"`、`speed`/`volume`/`pitch` 都是 1.0
 
-The headers set on every request are:
+每个请求都带这些 header:
 
 ```text
 Content-Type:        application/json
@@ -64,31 +64,42 @@ X-Api-Resource-Id:   <resource_id>
 X-Api-Request-Id:    <shortuuid>   (if reqid is given)
 ```
 
-OpenVox passes **only** `app_id` + `access_token`. The `access_token` is also read from `os.environ["VOLCENGINE_TTS_ACCESS_TOKEN"]` as a fallback inside the plugin (vestigial — OpenVox never sets that env).
+OpenVox 只传 `app_id` + `access_token`。插件内部还会从 `os.environ["VOLCENGINE_TTS_ACCESS_TOKEN"]` 读 fallback(残留逻辑 —— OpenVox 从来不设这个 env)。
 
-## Patches applied by `main.py`
+### `LLM` — Ark 网关客户端
 
-Two runtime monkey-patches target the vendored STT class `livekit.plugins.volcengine.stt.SpeechStream`:
+`plugins/livekit-plugins-volcengine/livekit/plugins/volcengine/llm.py` 用 dataclass 风格的 `LLM`,目标 `https://ark.cn-beijing.volces.com/api/v3/`,需要 `volcengine.llm` 一组凭证。**OpenVox 不调它**,LLM 一段走 `livekit-plugins-openai` 的 `openai.LLM`(根 `pyproject.toml` 钉 `==1.6.4`)指向本地 Hermes api_server。
 
-1. **`_process_stream_event` wrapper** — after the original method runs, the patch parses the response payload and logs `[用户语音] <text>` only when `utterances[0].definite` is `True`. This is the operator-visible marker for what the user said. The patch uses `parse_response` from the same module to decode the raw data dict.
-2. **`_run` wrapper** — catches `asyncio.CancelledError` around `await _orig_stt_run(self)` and returns silently. The original `_run` starts a nested `recv_task` on `aiohttp.ClientSession.ws.receive()`; on shutdown `livekit-agents 1.6.x` cancels every task in the child process, and the `_GatheringFuture` exception bubbles out as "exception was never retrieved" stderr noise. The patch preserves all original cleanup (`ws.close()` + `gracely_cancel()` in the plugin's `finally` block) but suppresses the cancel-path stderr.
+### `RealtimeModel`
 
-Both patches are installed once at module import and live at the top of `main.py`. They are necessary, not optional.
+`realtime.py` 提供 `RealtimeModel`,基于 Volcengine 实时语音对话大模型(双向流)。OpenVox 不用;`tests/test_main_build_session.py::test_volcengine_realtime_branch_removed` 通过源码扫描锁住这一点。
 
-## `plugins/livekit-plugins-qwen/` — present but unused
+## `main.py` 给 vendored 插件打的 patch
 
-The repo also ships `plugins/livekit-plugins-qwen/` (a Qwen Omni Realtime plugin). `main.py` does **not** import it; `tests/test_main_build_session.py::test_qwen_realtime_branch_removed` enforces this via `assert "qwen" not in src.lower()`. Keep the directory around as a reference for the previously-removed `qwen-realtime` pipeline mode.
+两处运行时 monkey-patch 落在 vendored STT 的 `livekit.plugins.volcengine.stt.SpeechStream` 上:
 
-## Why we do not call `volcengine.LLM`
+1. **`_process_stream_event` wrap** — 原方法跑完后,patch 用同模块的 `parse_response` 解码 payload,只在 `utterances[0].definite` 为 `True` 时打 `[用户语音] <text>`。这是运维侧"用户说了什么"的可视锚点;`logging.basicConfig` 不会自动展开 `extra={"text": ...}`,所以 patch 直接读已解析 payload。
+2. **`_run` wrap** — `await _orig_stt_run(self)` 外层包 `try / except asyncio.CancelledError`,cancel 时静默 `return`。原 `_run` 在 `aiohttp.ClientSession.ws.receive()` 上起了一个嵌套 `recv_task`;`livekit-agents 1.6.x` 在子进程拆掉时 cancel 所有 task,无人 `await` 的 `_GatheringFuture` 异常会以 "exception was never retrieved" 形式污染 stderr。patch 保留插件原始 `finally` 里的 `ws.close()` + `gracely_cancel()` 清理,只屏蔽 cancel 路径的 stderr。
 
-The plugin's `LLM` class hits Volcengine Ark (`https://ark.cn-beijing.volces.com/api/v3/`) and would require `volcengine.llm` credentials. OpenVox instead uses `livekit-plugins-openai`'s `openai.LLM` (pinned to `==1.6.4` in `pyproject.toml`) pointed at the local Hermes api_server. See [Integrations → Hermes LLM](./hermes-llm.md).
+TTS 的 `SynthesizeStream._run` 也有一处对称的 patch(`_patched_tts_run`):HTTP 同步迭代器上没有 inner `recv_task` 可 drain,改为在 `_run` 入口 swallow `CancelledError`,让上层 gather 不再收到该异常。
+
+三处 patch 都在 `main.py` 模块加载时一次性安装、集中在文件顶部。**必需,不是可选**。
+
+## `plugins/livekit-plugins-qwen/` — 目录在但未用
+
+仓库还 ship 了 `plugins/livekit-plugins-qwen/`(Qwen Omni Realtime 插件)。`main.py` **不 import 它**;`tests/test_main_build_session.py::test_qwen_realtime_branch_removed` 用 `assert "qwen" not in src.lower()` 锁住。保留目录作为之前移除的 `qwen-realtime` pipeline 模式的参考。
+
+## 为什么不用 `volcengine.LLM`
+
+`llm.py` 走的是 Volcengine Ark 网关(`https://ark.cn-beijing.volces.com/api/v3/`),需要 `volcengine.llm` 一组凭证;OpenVox 改用 `livekit-plugins-openai` 的 `openai.LLM` 指向本地 Hermes api_server,这样模型选型和密钥都跟 STT/TTS 解耦,LLM 替换不会牵动火山引擎那边。
 
 ## Source anchors
 
-- `plugins/livekit-plugins-volcengine/pyproject.toml` — `livekit-agents==1.5.4` pin (the reason `--no-deps` matters)
-- `plugins/livekit-plugins-volcengine/README.md` — upstream feature list (大模型 STT / TTS / LLM / Realtime)
-- `plugins/livekit-plugins-volcengine/livekit/plugins/volcengine/__init__.py` — exports `["TTS", "LLM", "STT", "RealtimeModel", "__version__"]`
-- `plugins/livekit-plugins-volcengine/livekit/plugins/volcengine/stt.py` — `STTOptions`, `_SpeechStream`, protocol header builder
-- `plugins/livekit-plugins-volcengine/livekit/plugins/volcengine/tts.py` — `_TTSOptions`, HTTP chunked request + headers
-- `plugins/livekit-plugins-volcengine/livekit/plugins/volcengine/llm.py` — dataclass-based `LLM` (not used by OpenVox)
-- `main.py` lines 105–154 (the two `SpeechStream` patches)
+- `apps/voice-agent/plugins/livekit-plugins-volcengine/pyproject.toml` — `livekit-agents==1.5.4` pin(为什么 `--no-deps` 必须)
+- `apps/voice-agent/plugins/livekit-plugins-volcengine/README.md` — 上游特性列表(大模型 STT / TTS / LLM / Realtime)
+- `apps/voice-agent/plugins/livekit-plugins-volcengine/livekit/plugins/volcengine/__init__.py` — export `["TTS", "LLM", "STT", "RealtimeModel", "__version__"]`
+- `apps/voice-agent/plugins/livekit-plugins-volcengine/livekit/plugins/volcengine/stt.py` — `STTOptions`、`_SpeechStream`、协议 header 构建
+- `apps/voice-agent/plugins/livekit-plugins-volcengine/livekit/plugins/volcengine/tts.py` — `_TTSOptions`、HTTP chunked 请求 + header
+- `apps/voice-agent/plugins/livekit-plugins-volcengine/livekit/plugins/volcengine/llm.py` — dataclass 风格 `LLM`(OpenVox 不调用)
+- `apps/voice-agent/plugins/livekit-plugins-volcengine/livekit/plugins/volcengine/realtime.py` — `RealtimeModel`(OpenVox 不调用)
+- `apps/voice-agent/main.py` 行 138–209(两处 `SpeechStream` patch + 一处 `SynthesizeStream` patch)

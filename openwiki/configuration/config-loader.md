@@ -1,41 +1,41 @@
 ---
 type: Reference
-title: OpenVox Config Loader
-description: Schema and lifecycle of ~/.openvox/config.json, the only configuration source for the worker.
-tags: [configuration, config, env]
+title: Config Loader(`~/.openvox/config.json`)
+description: 唯一配置源 `~/.openvox/config.json` 的 schema 与生命周期,以及 `OPENVOX_CONFIG` 覆盖项与单例缓存机制。
+tags: [configuration, config, env, openvox-config]
 ---
 
 # Config Loader
 
-`config.py` is a 100-line, dependency-free JSON loader. There is exactly one config file (`~/.openvox/config.json`) and one env override (`OPENVOX_CONFIG`) for tests. `.env` is no longer read by `main.py` (`tests/test_main_build_session.py::test_does_not_load_dotenv` enforces this).
+`apps/voice-agent/config.py` 是一个 100 行、无第三方依赖的 JSON loader。**唯一**配置源是 `~/.openvox/config.json`,**唯一**环境变量覆盖项是 `OPENVOX_CONFIG`(给测试用)。`main.py` 已经不读 `.env`(`tests/test_main_build_session.py::test_does_not_load_dotenv` 锁住)。
 
-## What `Config` does
+## `Config` 做什么
 
-`Config` is a thin read-only wrapper around a `dict[str, Any]` with two access methods:
+`Config` 是 `dict[str, Any]` 的只读包装,提供两种访问方法:
 
-- `cfg.get(dotted_key, default=None)` — returns `default` if any segment of the path is missing. **Never** raises.
-- `cfg.require(dotted_key)` — raises `ConfigError` (a `RuntimeError` subclass) on any missing segment. The pattern in `main.py` is always `require(...)` for keys the worker cannot run without.
+- `cfg.get(dotted_key, default=None)` — 路径任意一段缺失就返回 `default`。**永远不会抛异常。**
+- `cfg.require(dotted_key)` — 路径任意一段缺失抛 `ConfigError`(继承自 `RuntimeError`)。`main.py` 的固定写法是对"worker 没它就跑不起来"的键使用 `require(...)`。
 
-Path segments are split on `.`, e.g. `_cfg.require("volcengine.stt.app_id")`.
+路径段以 `.` 切分,例如 `_cfg.require("volcengine.stt.app_id")`。
 
-## Singleton lifecycle
+## 单例生命周期
 
-- `get_config()` reads `~/.openvox/config.json` (or `$OPENVOX_CONFIG` if set) on first call and caches the result in the module-global `_cfg`. Subsequent calls return the same instance.
-- `set_config(cfg)` is test-only and bypasses the file. `tests/test_config.py::test_set_and_get_config` exercises it.
-- `reset_config()` clears the cache so the next `get_config()` re-reads from disk. Used in tests that want to switch `OPENVOX_CONFIG` between calls.
-- `main.py` calls `get_config()` once at module import time. `scripts/start.sh` does an explicit JSON-validity pre-check via `python -c "import json; json.load(open(sys.argv[1]))"` so a malformed config fails loudly before the worker even loads.
+- `get_config()` 第一次调用时读 `~/.openvox/config.json`(若设置了 `$OPENVOX_CONFIG` 则读那个),结果缓存到模块全局 `_cfg`。后续调用直接返回同一个实例。
+- `set_config(cfg)` 仅供测试,绕过文件读。`tests/test_config.py::test_set_and_get_config` 覆盖它。
+- `reset_config()` 清空缓存,下一次 `get_config()` 会重新读盘。用于在不同测试用例之间切换 `OPENVOX_CONFIG`。
+- `main.py` 在模块 import 时调用一次 `get_config()`。`scripts/start.sh` 启动前用 `python -c "import json; json.load(open(sys.argv[1]))"` 显式做 JSON 合法性预检,这样格式错误能在 worker 加载前就大声失败,而不是在日志里慢慢显示 import error。
 
 ## Schema
 
-The keys currently consumed by `main._build_session()` and `WorkerOptions`:
+`main._build_session()` 和 `WorkerOptions` 当前消费的键:
 
 ```jsonc
 {
   "livekit": {
-    "url": "ws://localhost:7880",          // also used by LiveKit SDK as LIVEKIT_URL
+    "url": "ws://localhost:7880",          // 同时被 LiveKit SDK 作为 LIVEKIT_URL
     "api_key": "devkey",                   // LIVEKIT_API_KEY
     "api_secret": "secret",                // LIVEKIT_API_SECRET
-    "agent_name": "openz"                  // matches lk dispatch create --agent-name
+    "agent_name": "openz"                  // 与 lk dispatch create --agent-name 一致
   },
   "volcengine": {
     "stt": {
@@ -55,42 +55,42 @@ The keys currently consumed by `main._build_session()` and `WorkerOptions`:
 }
 ```
 
-Note: `livekit.agent_name` is intentionally still `"openz"` while the external app dispatches with `lk dispatch create --agent-name openz`. `docs/superpowers/specs/2026-07-09-rename-to-openvox-design.md` records the decision; the value should change once the app side migrates. The `lk dispatch create --agent-name` flag must always match this value, otherwise the worker never receives the job.
+注意 `livekit.agent_name` 故意仍是 `"openz"`,因为外部 app 还在用 `lk dispatch create --agent-name openz` 派单。`docs/superpowers/specs/2026-07-09-rename-to-openvox-design.md` 记录了这个决定;等 app 侧迁移后再统一改成 `openvox`。`lk dispatch create --agent-name` 必须始终等于这个值,否则 worker 永远收不到 job。
 
-## How the loader ties into runtime
+## loader 如何接进运行时
 
 ```mermaid
 flowchart LR
-    Env[OPENVOX_CONFIG env var] --> Resolver
+    Env[OPENVOX_CONFIG 环境变量] --> Resolver
     Default["~/.openvox/config.json"] --> Resolver
     Resolver --> Load[Config.load path]
-    Load --> Singleton[_cfg module global]
+    Load --> Singleton[_cfg 模块全局]
     Singleton --> Build[main._build_session]
     Singleton --> WorkerOpts[WorkerOptions agent_name]
     Build --> Plugins[STT/LLM/TTS kwargs]
 ```
 
-`scripts/start.sh` reads `livekit.url` / `api_key` / `api_secret` and exports them as `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`. The LiveKit SDK looks these up directly from `os.environ`, not from `Config`; the export is the bridge.
+`scripts/start.sh` 从 `livekit.url` / `api_key` / `api_secret` 读出并 export 为 `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET`。LiveKit SDK 直接走 `os.environ` 查这些,**不**走 `Config`;export 就是桥。
 
-## Adding a new key
+## 新增键的流程
 
-1. Add the segment under the appropriate business section in `~/.openvox/config.json` (`volcengine`, `livekit`, `hermes` are the existing ones).
-2. Read it in `main.py` via `_cfg.require("section.new_key")` (or `_cfg.get("...", default=...)` if optional).
-3. Add a test in `tests/test_main_build_session.py` (or write a new test file) that injects a `Config(...)` with the new key and asserts the plugin / option picks it up.
-4. The `Config` class itself does not need changes — its dot-path resolver handles arbitrary nesting (see `test_get_nested_key` and `test_require_raises_for_partial_nested_missing`).
+1. 在 `~/.openvox/config.json` 的相应业务段下加 sub-key(`volcengine` / `livekit` / `hermes` 是已有的)。
+2. 在 `main.py` 通过 `_cfg.require("section.new_key")` 读(可选则用 `_cfg.get("...", default=...)`)。
+3. 在 `tests/test_main_build_session.py`(或新建测试文件)注入含新键的 `Config(...)`,断言插件 / 选项拿到正确值。
+4. `Config` 类本身不需要改 —— 点路径解析器支持任意嵌套(见 `test_get_nested_key` 和 `test_require_raises_for_partial_nested_missing`)。
 
-## Pitfalls
+## 已知坑
 
-- A typo in a segment, e.g. `_cfg.require("volcengine.stt.appid")`, raises `ConfigError("missing required config key: volcengine.stt.appid")` at module import — `scripts/start.sh` will not catch this; only the worker startup log will. Use the exact path the loader produces when reading `as_dict()` in a REPL to confirm.
-- `Config.load` rejects non-object roots (`[1, 2, 3]`) and malformed JSON. Both raise `ConfigError`, not `json.JSONDecodeError`. `tests/test_config.py::test_load_raises_for_bad_json` and `test_load_raises_for_non_object_root` lock this.
-- Do not point `OPENVOX_CONFIG` at a non-JSON file in production; tests rely on this being a real JSON object.
+- 路径拼写错(如 `_cfg.require("volcengine.stt.appid")`)会在模块 import 时抛 `ConfigError("missing required config key: volcengine.stt.appid")`,`scripts/start.sh` **不会**预检这条;只有 worker 启动日志会看到。建议在 REPL 用 `as_dict()` 读出原始字典,把 loader 实际生成的路径抄过去再 require。
+- `Config.load` 拒绝非 object 根(如 `[1, 2, 3]`)和坏 JSON。两者都抛 `ConfigError` 而不是 `json.JSONDecodeError`。`tests/test_config.py::test_load_raises_for_bad_json` 和 `test_load_raises_for_non_object_root` 锁住这点。
+- 不要在生产环境把 `OPENVOX_CONFIG` 指向非 JSON 文件;测试依赖它就是合法 JSON object。
 
 ## Source anchors
 
-- `config.py` lines 26–106 (whole module)
-- `main.py` line 75 (`_cfg = get_config()`)
-- `main.py` lines 235–248 (`_build_session` reading six keys via `_cfg.require`)
-- `main.py` line 283 (`agent_name=_cfg.require("livekit.agent_name")`)
-- `scripts/start.sh` lines 31–53 (config existence + JSON sanity + env export)
-- `tests/test_config.py` (full coverage of `Config` / `get_config` / `set_config` / `reset_config`)
-- `tests/test_main_build_session.py::_make_fake_config` (canonical fake config used by other tests)
+- `apps/voice-agent/config.py` 行 26–106(整个模块)
+- `apps/voice-agent/main.py` 行 108(`_cfg = get_config()`)
+- `apps/voice-agent/main.py` 行 282–302(`_build_session` 通过 `_cfg.require` 读 6 个键)
+- `apps/voice-agent/main.py` 行 377(`agent_name=_cfg.require("livekit.agent_name")`)
+- `apps/voice-agent/scripts/start.sh` 行 31–53(config 存在性 + JSON 合法性 + 导出 `LIVEKIT_*`)
+- `apps/voice-agent/tests/test_config.py`(`Config` / `get_config` / `set_config` / `reset_config` 全覆盖)
+- `apps/voice-agent/tests/test_main_build_session.py::_make_fake_config`(其他测试用的标准 fake config)
