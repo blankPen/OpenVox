@@ -75,3 +75,13 @@ vendored 插件一律用 keyword-only 参数。**不要**照搬 PyPI 上 `liveki
 - 上游基础示例：<https://github.com/livekit/agents/blob/main/examples/voice_agents/basic_agent.py>
 - 操作手册（三终端启动、故障排查表、浏览器客户端）：本仓库 `README.md`
 - 火山引擎控制台：<https://console.volcengine.com/voice/app>
+
+<!-- OPENWIKI:START -->
+
+## OpenWiki
+
+This repository uses OpenWiki for recurring code documentation. Start with `openwiki/quickstart.md`, then follow its links to architecture, workflows, domain concepts, operations, integrations, testing guidance, and source maps.
+
+The scheduled OpenWiki GitHub Actions workflow refreshes the repository wiki. Do not hand-edit generated OpenWiki pages unless explicitly asked; prefer updating source code/docs and letting OpenWiki regenerate.
+
+<!-- OPENWIKI:END -->
