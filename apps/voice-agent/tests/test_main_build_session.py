@@ -2,7 +2,7 @@
 
 These tests assert the public contract of ``_build_session``:
 
-* pipeline 模式必须用 openai.LLM（指向 hermes api_server）
+* pipeline 模式必须用 openai.LLM（指向配置选择的 OpenAI 兼容端点）
 * STT / TTS 仍是火山引擎
 * qwen-realtime / volcengine.RealtimeModel 分支必须不存在
 * 配置从 ~/.openvox/config.json 读取（不再用 .env / 环境变量）
@@ -27,6 +27,7 @@ def _make_fake_config() -> "Config":  # type: ignore[name-defined]  # noqa: F821
             "tts": {"app_id": "tts-app-id", "access_token": "tts-access-token"},
         },
         "livekit": {"agent_name": "test-agent"},
+        "llm": {"provider": "hermes"},
         "hermes": {
             "api_base": "http://127.0.0.1:9999/v1",
             "api_key": "test-api-key",
@@ -66,6 +67,37 @@ def test_pipeline_uses_openai_llm(fake_config):
     # AgentSession 拿到的是 openai.LLM 返回的 mock 实例
     session_kwargs = mock_session.call_args.kwargs
     assert session_kwargs["llm"] is mock_llm.return_value
+
+
+def test_pipeline_uses_agentd_llm(monkeypatch):
+    """agentd 模式必须把 agentd 端点配置传给 openai.LLM。"""
+    import main
+    from config import Config
+
+    monkeypatch.setattr(main, "_cfg", Config({
+        "volcengine": {
+            "stt": {"app_id": "stt-app-id", "access_token": "stt-access-token"},
+            "tts": {"app_id": "tts-app-id", "access_token": "tts-access-token"},
+        },
+        "llm": {"provider": "agentd"},
+        "agentd": {
+            "api_base": "http://127.0.0.1:8787/v1",
+            "api_key": "agentd-api-key",
+            "model": "agentd/claude",
+        },
+    }))
+
+    with patch("livekit.plugins.openai.LLM") as mock_llm, \
+         patch("livekit.plugins.volcengine.STT"), \
+         patch("livekit.plugins.volcengine.TTS"), \
+         patch("main.AgentSession"):
+        main._build_session()
+
+    mock_llm.assert_called_once_with(
+        model="agentd/claude",
+        base_url="http://127.0.0.1:8787/v1",
+        api_key="agentd-api-key",
+    )
 
 
 def test_pipeline_uses_volcengine_stt_tts(fake_config):

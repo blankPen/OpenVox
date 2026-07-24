@@ -1,7 +1,7 @@
 """LiveKit Agent 与 Volcengine（火山引擎）语音服务集成的入口。
 
 运行模式：STT + LLM + TTS pipeline 三段式。STT/TTS 走火山引擎，LLM 走
-``openai.LLM``（对接本地 Hermes OpenAI-兼容 api_server）。
+``openai.LLM``（按配置对接 Hermes 或 agentd 的 OpenAI-兼容端点）。
 
 配置从 ``~/.openvox/config.json`` 读取（schema 见 config.py 模块头注释）。路径
 可通过 OPENVOX_CONFIG 环境变量覆盖，主要供测试使用。模块导入即读一次。
@@ -13,6 +13,7 @@ import math
 import sys
 
 from config import get_config
+from llm_provider import build_llm
 
 # Initialize logger EARLY so the Hermes/LLM-TEXT patches can use it before
 # the rest of the module body executes.
@@ -282,19 +283,15 @@ def _prewarm(proc) -> AgentSession:
 def _build_session() -> AgentSession:
     """构建 ``AgentSession``。
 
-    STT/TTS 走火山引擎插件，LLM 走 ``openai.LLM`` 直连 Hermes gateway 的
-    OpenAI 兼容 api_server（默认 :8642，``hermes.api_base``）。
+    STT/TTS 走火山引擎插件，LLM 走 ``openai.LLM``，按 ``llm.provider``
+    选择 Hermes 或 agentd 的 OpenAI 兼容端点。
     """
     return AgentSession(
         stt=volcengine.STT(
             app_id=_cfg.require("volcengine.stt.app_id"),
             access_token=_cfg.require("volcengine.stt.access_token"),
         ),
-        llm=openai.LLM(
-            model=_cfg.require("hermes.model"),
-            base_url=_cfg.require("hermes.api_base"),
-            api_key=_cfg.require("hermes.api_key"),
-        ),
+        llm=build_llm(_cfg, openai.LLM),
         tts=volcengine.TTS(
             app_id=_cfg.require("volcengine.tts.app_id"),
             access_token=_cfg.require("volcengine.tts.access_token"),
