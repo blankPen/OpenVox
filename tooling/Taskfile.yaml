@@ -25,10 +25,22 @@ tasks:
       - docker compose down
 
   dev:agent:
-    desc: Start voice-agent worker (Python)
+    desc: Start voice-agent worker via the unified openvox CLI
     dir: apps/voice-agent
     cmds:
-      - python main.py start
+      - python openvox_cli.py start --yes
+
+  dev:init:
+    desc: Initialise ~/.openvox/config.json and pick the LLM provider
+    dir: apps/voice-agent
+    cmds:
+      - python openvox_cli.py init
+
+  dev:status:
+    desc: Report per-provider runtime status (hermes / agentd / codex / openclaw)
+    dir: apps/voice-agent
+    cmds:
+      - python openvox_cli.py status
 
   dev:client:
     desc: Start Flutter voice-client
