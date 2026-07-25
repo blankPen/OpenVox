@@ -9,6 +9,9 @@ dependencies = [
     "livekit-plugins-openai==1.6.4",
 ]
 
+[project.scripts]
+openvox = "openvox_cli:main"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
