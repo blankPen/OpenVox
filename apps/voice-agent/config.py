@@ -105,3 +105,22 @@ def set_config(cfg: Config) -> None:
     """注入一个 Config 对象（仅测试用）。"""
     global _cfg
     _cfg = cfg
+
+def merge_section(base: dict, section: dict) -> dict:
+    """Deep-merge ``section`` into ``base`` (mutates and returns ``base``).
+
+    Used by helpers that build updated config payloads — e.g. when
+    composing the Hermes API server block to inject into
+    ``~/.hermes/config.yaml`` or merging user overrides on top of the
+    defaults returned by :func:`get_config`.
+
+    Nested dicts are merged recursively; non-dict values in ``section``
+    overwrite whatever is at that path in ``base``. The merge is
+    in-place but the return value is provided for fluent call style.
+    """
+    for key, value in section.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            merge_section(base[key], value)
+        else:
+            base[key] = value
+    return base

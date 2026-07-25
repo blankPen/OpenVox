@@ -126,3 +126,41 @@ def test_default_path_is_openvox_config(monkeypatch):
     import config as cfg_module
     expected = Path("~/.openvox/config.json").expanduser()
     assert cfg_module.CONFIG_PATH == expected
+
+# ───────── 单元测试：merge_section（配置写入辅助） ─────────
+
+
+def test_merge_section_adds_new_keys():
+    """merge_section 写入 section 的 key 到 base，不存在则新增。"""
+    from config import merge_section
+
+    base: dict = {"a": 1}
+    result = merge_section(base, {"b": 2})
+    assert result == {"a": 1, "b": 2}
+    assert base is result  # mutates & returns same object
+
+
+def test_merge_section_recurses_into_nested_dicts():
+    """merge_section 递归合并嵌套 dict，不覆盖整段。"""
+    from config import merge_section
+
+    base = {"platforms": {"api_server": {"enabled": False, "extra": {"host": "0.0.0.0"}}}}
+    section = {"platforms": {"api_server": {"enabled": True, "extra": {"port": 8642}}}}
+    result = merge_section(base, section)
+    assert result == {
+        "platforms": {
+            "api_server": {
+                "enabled": True,
+                "extra": {"host": "0.0.0.0", "port": 8642},
+            }
+        }
+    }
+
+
+def test_merge_section_overwrites_non_dict_values():
+    """非 dict 值在 section 中直接覆盖 base 对应位置。"""
+    from config import merge_section
+
+    base = {"a": {"b": 1}}
+    merge_section(base, {"a": 2})
+    assert base == {"a": 2}
