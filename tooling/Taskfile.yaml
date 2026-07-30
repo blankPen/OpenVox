@@ -5,6 +5,8 @@ version: "3"
 
 vars:
   PROJECT_NAME: openvox
+  REPO_ROOT: "{{.ROOT_DIR}}"
+  TOOLING: "{{.ROOT_DIR}}/tooling/scripts"
 
 tasks:
   default:
@@ -12,6 +14,7 @@ tasks:
     cmds:
       - task --list
 
+  # ── Dev workflow ────────────────────────────────────────────────
   dev:infra:
     desc: Start LiveKit Server (Docker)
     dir: infra
@@ -20,6 +23,10 @@ tasks:
 
   dev:infra-down:
     desc: Stop LiveKit Server
+    cmds:
+      - task: dev:infra-down-cmd
+
+  dev:infra-down-cmd:
     dir: infra
     cmds:
       - docker compose down
@@ -37,7 +44,7 @@ tasks:
       - flutter run
 
   dev:up:
-    desc: 一键起 LiveKit + agent + 派单（不含 client）
+    desc: 一键起 LiveKit + agent（不含 client）
     cmds:
       - task: dev:infra
       - task: dev:agent
@@ -46,6 +53,65 @@ tasks:
     desc: Stop everything
     cmds:
       - task: dev:infra-down
+
+  # ── Local builds ────────────────────────────────────────────────
+  build:cli:
+    desc: Build both CLIs (agentd + openvox)
+    cmds:
+      - "{{.TOOLING}}/build-cli.sh all"
+
+  build:cli:agentd:
+    desc: Build only agentd (TypeScript → dist/)
+    cmds:
+      - "{{.TOOLING}}/build-cli.sh agentd"
+
+  build:cli:openvox:
+    desc: Build only openvox (Python wheel + sdist)
+    cmds:
+      - "{{.TOOLING}}/build-cli.sh openvox"
+
+  build:client:
+    desc: Build Flutter voice-client for android + ios
+    cmds:
+      - "{{.TOOLING}}/build-client.sh all"
+
+  build:client:android:
+    desc: Build voice-client Android APK (debug)
+    cmds:
+      - "{{.TOOLING}}/build-client.sh android"
+
+  build:client:ios:
+    desc: Build voice-client iOS .app (debug, no codesign)
+    cmds:
+      - "{{.TOOLING}}/build-client.sh ios"
+
+  build:all:
+    desc: Build all CLI + client artifacts locally
+    cmds:
+      - task: build:cli
+      - task: build:client
+
+  # ── Local installs ──────────────────────────────────────────────
+  install:cli:
+    desc: Build + install both CLIs globally (agentd via npm, openvox via pipx/pip)
+    cmds:
+      - "{{.TOOLING}}/install-cli.sh all"
+
+  install:cli:agentd:
+    desc: Build + install agentd globally
+    cmds:
+      - "{{.TOOLING}}/install-cli.sh agentd"
+
+  install:cli:openvox:
+    desc: Build + install openvox (pipx if available, else pip)
+    cmds:
+      - "{{.TOOLING}}/install-cli.sh openvox"
+
+  # ── Release helpers ─────────────────────────────────────────────
+  release:check:
+    desc: Print detected version for each app (mirrors CI behavior)
+    cmds:
+      - bash -c 'set -e; for app in agentd openvox voice-client; do printf "%-13s %s\n" "$app" "$(bash {{.TOOLING}}/lib/versions.sh; app_version $app)"; done'
 
   lint:
     desc: Lint all (TODO 实施阶段再细化)
