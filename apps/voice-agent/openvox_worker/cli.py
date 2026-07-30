@@ -226,6 +226,15 @@ def init_config(
     for key, value in PROVIDER_DEFAULTS.get(backend, {}).items():
         section.setdefault(key, value)
 
+    # Seed LiveKit connection defaults if not already present.
+    livekit_sec = data.setdefault("livekit", {})
+    for lk_key, lk_default in (
+        ("url", "ws://localhost:7880"),
+        ("api_key", "devkey"),
+        ("api_secret", "secret"),
+        ("agent_name", "openz"),
+    ):
+        livekit_sec.setdefault(lk_key, lk_default)
 
     _atomic_write_json(path, data)
     output(f"wrote runtime config for provider={provider} -> {path}")
@@ -296,13 +305,16 @@ class _WorkerLauncher:
     inject a fake with the same ``start()`` surface.
     """
 
-    def __init__(self, *, config_path: Path | None) -> None:
+    def __init__(self, *, config_path: Path | None, livekit_env: dict[str, str] | None = None) -> None:
         self._config_path = config_path
+        self._livekit_env = livekit_env or {}
 
     def start(self) -> None:
         env = dict(os.environ)
         if self._config_path is not None:
             env["OPENVOX_CONFIG"] = str(self._config_path)
+        # Inject LiveKit connection settings from config (overrides env).
+        env.update(self._livekit_env)
         result = subprocess.run(
             [sys.executable, "-m", "openvox_worker.main", "start"],
             env=env,
@@ -439,11 +451,22 @@ def _cmd_start(args, *, out, err) -> int:
         cfg = Config.load(config_path)
 
     try:
+        # Extract LiveKit connection settings from config for the worker.
+        livekit_env: dict[str, str] = {}
+        lk_url = cfg.get("livekit.url")
+        if lk_url:
+            livekit_env["LIVEKIT_URL"] = lk_url
+        lk_key = cfg.get("livekit.api_key")
+        if lk_key:
+            livekit_env["LIVEKIT_API_KEY"] = lk_key
+        lk_secret = cfg.get("livekit.api_secret")
+        if lk_secret:
+            livekit_env["LIVEKIT_API_SECRET"] = lk_secret
         return orchestrate_start(
             cfg,
             hermes=_build_hermes(cfg),
             agentd=_build_agentd(cfg),
-            worker=_WorkerLauncher(config_path=config_path),
+            worker=_WorkerLauncher(config_path=config_path, livekit_env=livekit_env),
             auto_start=True,
         )
     except PlannedProviderError as exc:
