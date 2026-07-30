@@ -141,7 +141,7 @@ def init_config(
     data = _read_existing(path)
     if provider is None:
         if interactive and _HAVE_QUESTIONARY:
-            choices = [questionary.Choice(title=v, value=k) for k, v in PROVIDER_DEFAULTS.items() if k in ALL_PROVIDERS]
+            choices = [questionary.Choice(title=k, value=k) for k in ALL_PROVIDERS]
             provider = questionary.select("Select LLM provider", choices=choices).ask()
         else:
             entered = input_fn(f"LLM provider {list(ALL_PROVIDERS)} [hermes]: ").strip()
