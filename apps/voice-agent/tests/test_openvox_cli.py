@@ -275,3 +275,32 @@ def test_init_interactive_fallback_shows_status_badges(
     out, _ = capsys.readouterr()
     assert "✓ Hermes (local gateway) (installed)" in out
     assert "✗ Claude Code (not installed)" in out
+
+
+def test_init_does_not_prompt_for_api_key_when_agentd_backend(
+    tmp_path, monkeypatch
+):
+    """选择 claude 等 agentd 后端时不应询问 API key（Claude Code 自带认证）。"""
+    monkeypatch.setattr(
+        openvox_cli.shutil,
+        "which",
+        lambda name: "/bin/claude" if name == "claude" else None,
+    )
+    monkeypatch.setattr(openvox_cli, "_HAVE_QUESTIONARY", False)
+    inputs = iter(["2"])  # select Claude Code
+    path = tmp_path / "config.json"
+
+    def _fail_getpass(_prompt):
+        raise AssertionError("should not prompt for API key")
+
+    openvox_cli.init_config(
+        path,
+        provider=None,
+        interactive=True,
+        input_fn=lambda _: next(inputs),
+        getpass_fn=_fail_getpass,
+        output=lambda msg: None,
+    )
+    data = json.loads(path.read_text())
+    assert data["llm"]["provider"] == "agentd"
+    assert data["agentd"]["api_key"] == ""

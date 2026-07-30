@@ -230,7 +230,10 @@ def init_config(
     for key, value in PROVIDER_DEFAULTS.get(backend, {}).items():
         section.setdefault(key, value)
 
-    if interactive and provider in SUPPORTED_PROVIDERS:
+    # Only Hermes benefits from a local api_key prompt. agentd-backed tools
+    # (claude / codex / openclaw) authenticate through their own CLI, so
+    # prompting here is confusing and unnecessary.
+    if interactive and backend == "hermes":
         if _HAVE_QUESTIONARY:
             secret = questionary.password(f"{provider} API key (blank to skip)").ask() or ""
         else:
