@@ -28,7 +28,6 @@ from __future__ import annotations
 import argparse
 
 from rich_argparse import RawDescriptionRichHelpFormatter
-import getpass
 import json
 import os
 import subprocess
@@ -162,17 +161,14 @@ def init_config(
     *,
     provider: str | None,
     input_fn: Callable[[str], str] = input,
-    getpass_fn: Callable[[str], str] = getpass.getpass,
     output: Callable[..., None] = print,
     interactive: bool = False,
 ) -> Config:
-    """Write / update ``path`` selecting ``provider``; never echo the secret.
+    """Write / update ``path`` selecting ``provider``.
 
     Existing keys are preserved (deep-safe): only ``llm.provider`` and any
     *missing* keys in the provider's section are filled from
-    :data:`PROVIDER_DEFAULTS`. In flag mode (``interactive=False``) no secret
-    is read; in interactive mode the API key is collected via ``getpass`` and
-    written to the file (mode ``0600``) but never printed.
+    :data:`PROVIDER_DEFAULTS`.
 
     When ``interactive=True`` and no ``--provider`` flag is given, the user is
     presented with a status-aware prompt. Selecting a provider that is not
@@ -230,17 +226,6 @@ def init_config(
     for key, value in PROVIDER_DEFAULTS.get(backend, {}).items():
         section.setdefault(key, value)
 
-    # Only Hermes benefits from a local api_key prompt. agentd-backed tools
-    # (claude / codex / openclaw) authenticate through their own CLI, so
-    # prompting here is confusing and unnecessary.
-    if interactive and backend == "hermes":
-        if _HAVE_QUESTIONARY:
-            secret = questionary.password(f"{provider} API key (blank to skip)").ask() or ""
-        else:
-            secret = getpass_fn(f"{provider} API key (blank to skip): ").strip()
-        if secret:
-            section["api_key"] = secret
-        secret = None
 
     _atomic_write_json(path, data)
     output(f"wrote runtime config for provider={provider} -> {path}")

@@ -290,15 +290,11 @@ def test_init_does_not_prompt_for_api_key_when_agentd_backend(
     inputs = iter(["2"])  # select Claude Code
     path = tmp_path / "config.json"
 
-    def _fail_getpass(_prompt):
-        raise AssertionError("should not prompt for API key")
-
     openvox_cli.init_config(
         path,
         provider=None,
         interactive=True,
         input_fn=lambda _: next(inputs),
-        getpass_fn=_fail_getpass,
         output=lambda msg: None,
     )
     data = json.loads(path.read_text())
