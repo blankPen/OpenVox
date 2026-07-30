@@ -54,6 +54,13 @@ SUPPORTED_PROVIDERS = ("hermes", "agentd")
 PLANNED_PROVIDERS = ("codex", "openclaw")
 ALL_PROVIDERS = SUPPORTED_PROVIDERS + PLANNED_PROVIDERS
 
+#: CLI-style names that map to backends.
+PROVIDER_ALIASES = {
+    "claude": "agentd",
+    "codex": "agentd",
+    "openclaw": "agentd",
+}
+
 #: Minimal, editable defaults seeded into config for each provider section.
 PROVIDER_DEFAULTS: dict[str, dict[str, Any]] = {
     "hermes": {
@@ -164,6 +171,8 @@ def init_config(
         else:
             entered = input_fn(f"LLM provider [hermes]: ").strip()
             provider = entered or "hermes"
+    # Resolve CLI-style names (claude → agentd, etc.)
+    provider = PROVIDER_ALIASES.get(provider, provider)
     if provider not in ALL_PROVIDERS:
         raise ConfigError("unknown llm provider")
 
@@ -189,16 +198,15 @@ def init_config(
 
 
 def _detect_providers() -> dict:
-    """Scan PATH for available LLM providers and return {provider: label}."""
+    """Scan PATH for available LLM backends and return {provider: label}."""
     found = {}
-    for provider, binary, label in [
-        ("hermes", "hermes", "Hermes (local gateway)"),
-        ("claude", "claude", "claude (Claude Code)"),
-        ("codex", "codex", "codex (Codex)"),
-        ("openclaw", "openclaw", "openclaw (OpenClaw)"),
-    ]:
-        if shutil.which(binary) is not None:
-            found[provider] = label
+    if shutil.which("hermes") is not None:
+        found["hermes"] = "Hermes (local gateway)"
+    # agentd is usable if any ACP-compatible CLI is on PATH.
+    agentd_bins = {"claude": "Claude Code", "codex": "Codex", "openclaw": "OpenClaw"}
+    agentd_found = [label for binary, label in agentd_bins.items() if shutil.which(binary) is not None]
+    if agentd_found:
+        found["agentd"] = "agentd (ACP bridge) — " + ", ".join(agentd_found)
     return found
 
 
@@ -368,9 +376,11 @@ def _cmd_start(args, *, out, err) -> int:
         # --provider given with no config → auto-init.
         if config_path is None:
             config_path = _resolve_default_path()
+        # Resolve CLI-style names (claude → agentd, etc.)
+        provider = PROVIDER_ALIASES.get(args.provider, args.provider)
         init_config(
             config_path,
-            provider=args.provider,
+            provider=provider,
             interactive=False,
             output=lambda msg: print(msg, file=out),
         )
