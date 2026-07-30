@@ -50,7 +50,7 @@ except ImportError:
 
 # ───────── Provider catalogue ─────────
 
-SUPPORTED_PROVIDERS = ("hermes", "agentd")
+SUPPORTED_PROVIDERS = ("hermes", "agentd", "claude")
 PLANNED_PROVIDERS = ("codex", "openclaw")
 ALL_PROVIDERS = SUPPORTED_PROVIDERS + PLANNED_PROVIDERS
 
@@ -345,6 +345,7 @@ def collect_status(cfg: Config, *, hermes: Any, agentd: Any) -> dict:
             },
             "codex": {"status": "planned"},
             "openclaw": {"status": "planned"},
+            "claude": {"status": "planned"},
         },
     }
 
