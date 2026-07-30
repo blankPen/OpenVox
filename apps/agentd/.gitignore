@@ -1,0 +1,15 @@
+# Build artifacts
+dist/
+node_modules/
+
+# Runtime state (lives at ~/.agentd/, but tests may write here too)
+.agentd/
+
+# Logs
+*.log
+build-stdout.log
+
+# Editor
+.vscode/
+.idea/
+.DS_Store

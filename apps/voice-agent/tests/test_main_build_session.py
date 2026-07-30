@@ -20,7 +20,7 @@ MAIN_PATH = Path(__file__).resolve().parents[1] / "main.py"
 
 def _make_fake_config() -> "Config":  # type: ignore[name-defined]  # noqa: F821
     """Build a Config object with values the tests assert against."""
-    from config import Config
+    from openvox_worker.config import Config
     return Config({
         "volcengine": {
             "stt": {"app_id": "stt-app-id", "access_token": "stt-access-token"},
@@ -38,7 +38,7 @@ def _make_fake_config() -> "Config":  # type: ignore[name-defined]  # noqa: F821
 @pytest.fixture
 def fake_config(monkeypatch):
     """Inject a fake Config into main so _build_session doesn't read ~/.openvox/config.json."""
-    import main
+    import openvox_worker.main
     fake = _make_fake_config()
     monkeypatch.setattr(main, "_cfg", fake)
     return fake
@@ -46,7 +46,7 @@ def fake_config(monkeypatch):
 
 def test_pipeline_uses_openai_llm(fake_config):
     """pipeline 模式必须把 openai.LLM 构造出来，三个配置都来自 hermes 段。"""
-    import main
+    import openvox_worker.main
 
     with patch("livekit.plugins.openai.LLM") as mock_llm, \
          patch("livekit.plugins.volcengine.STT") as mock_stt, \
@@ -70,7 +70,7 @@ def test_pipeline_uses_openai_llm(fake_config):
 
 def test_pipeline_uses_volcengine_stt_tts(fake_config):
     """pipeline 模式 STT / TTS 仍用火山引擎插件。"""
-    import main
+    import openvox_worker.main
 
     with patch("livekit.plugins.openai.LLM"), \
          patch("livekit.plugins.volcengine.STT") as mock_stt, \

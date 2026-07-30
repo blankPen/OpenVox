@@ -1,11 +1,22 @@
 #!/bin/bash
-# scripts/start.sh — 启动 / 停止 / 查询 LiveKit Agent Worker
+# scripts/start.sh — start/fg/stop/status 兼容 shim
+#
+# 委派给统一 openvox CLI（python -m openvox_worker）；本脚本不再实现任何
+# provider / 进程生命周期逻辑，也不再假设本机独占 LiveKit / agent 端口——
+# 避免影响共享开发机上其他用户的进程。
 #
 # 用法：
-#   ./scripts/start.sh         # 后台启动，日志到 /tmp/livekit-worker.log
-#   ./scripts/start.sh fg      # 前台启动（看实时日志）
-#   ./scripts/start.sh stop    # 停止 worker
-#   ./scripts/start.sh status  # 查看状态 + 最近日志
+#   ./scripts/start.sh         # openvox start --yes
+#   ./scripts/start.sh fg      # openvox start --yes（前台）
+#   ./scripts/start.sh stop    # openvox stop
+#   ./scripts/start.sh status  # openvox status
+#
+# 注意：
+# - `start` / `fg` 不假设本机独占 LiveKit IPC 端口（8081 之类）；如果端口
+#   被无关进程占用，那是用户/LiveKit 自己的问题，由 openvox CLI 报错。
+# - `stop` 只停止受管的 `agentd`，不会去碰本机其它 LiveKit / worker 进程。
+# - 没有 LIVEKIT 进程的机器上跑 `status` 是合法的：openvox 只读 supervisor
+#   pidfile，不会去探测端口。
 
 set -e
 
@@ -24,101 +35,43 @@ else
     exit 1
 fi
 
-# 配置入口：~/.openvox/config.json（路径可用 OPENVOX_CONFIG 环境变量覆盖）。
-# main.py 在 import 时就读，缺关键 key 会 ConfigError 早抛。这里只做
-# 一次性的存在性 / 语法检查，让启动脚本能先报而不是要等 worker 起来后
-# 在日志里才看到 import error。
-CONFIG_PATH="${OPENVOX_CONFIG:-$HOME/.openvox/config.json}"
-CONFIG_PATH="${CONFIG_PATH/#\~/$HOME}"  # 展开开头的 ~
-if [ ! -f "$CONFIG_PATH" ]; then
-    echo "ERROR: config not found: $CONFIG_PATH"
-    echo "       main.py 不再读本地 .env；请创建 ~/.openvox/config.json（schema 见 config.py）。"
-    exit 1
-fi
-if ! "$PY" -c "import json,sys; json.load(open(sys.argv[1]))" "$CONFIG_PATH" 2>/dev/null; then
-    echo "ERROR: config 解析失败: $CONFIG_PATH"
-    exit 1
-fi
-
-# 从 config 抽 AGENT_NAME 仅用于展示（main.py 自己会读）
-AGENT_NAME=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['livekit']['agent_name'])" "$CONFIG_PATH" 2>/dev/null || echo "<unknown>")
-
-# 把 LIVEKIT_* 导出到环境变量 — livekit-agents 的 worker.run() 走
-# os.environ['LIVEKIT_URL'] / ['LIVEKIT_API_KEY'] / ['LIVEKIT_API_SECRET']
-# 这条路径，main.py 自己用 config 读，但 LiveKit SDK 内部仍然期望 env。
-# 不破坏 main.py 的「配置走 config」原则，只在启动器这一层做适配。
-LIVEKIT_URL=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['livekit']['url'])" "$CONFIG_PATH")
-LIVEKIT_API_KEY=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['livekit']['api_key'])" "$CONFIG_PATH")
-LIVEKIT_API_SECRET=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['livekit']['api_secret'])" "$CONFIG_PATH")
-export LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET
+# 真正的进程生命周期交给统一 CLI。本脚本不再做任何基于端口的进程管理。
+# 优先用 `openvox` console script（pip install 后可用），否则 fallback
+# 到 `python -m openvox_worker`（开发模式）。
+run_openvox() {
+    if command -v openvox >/dev/null 2>&1; then
+        exec openvox "$@"
+    fi
+    exec "$PY" -m openvox_worker "$@"
+}
 
 ACTION="${1:-start}"
-WORKER_PORT="${WORKER_PORT:-8081}"
-LOG="${WORKER_LOG:-/tmp/livekit-worker.log}"
-
-stop_worker() {
-    pids=$(lsof -ti:$WORKER_PORT 2>/dev/null || true)
-    if [ -n "$pids" ]; then
-        echo "杀掉卡在 $WORKER_PORT 的 worker: $pids"
-        echo "$pids" | xargs kill -9 2>/dev/null || true
-        sleep 1
-    fi
-}
 
 case "$ACTION" in
     start)
-        stop_worker
-        echo "后台启动 worker..."
-        "$PY" main.py start > "$LOG" 2>&1 &
-        echo "worker pid: $!"
-        sleep 5
-        if lsof -i:$WORKER_PORT >/dev/null 2>&1; then
-            echo "✅ worker 在跑（日志：$LOG）"
-            echo "AGENT_NAME=$AGENT_NAME"
-            echo ""
-            echo "派单："
-            echo "  lk dispatch create --room demo --agent-name $AGENT_NAME"
-            echo ""
-            echo "查日志：tail -f $LOG"
-            echo "停 worker：./scripts/start.sh stop"
-        else
-            echo "❌ worker 没起来，看日志：$LOG"
-            tail -30 "$LOG"
-            exit 1
-        fi
+        run_openvox start --yes
         ;;
 
     fg)
-        stop_worker
-        exec "$PY" main.py start
+        # 前台（实时日志）；同一份 worker 由 CLI 拉起；脚本不去抢别人的端口。
+        run_openvox start --yes
         ;;
 
     stop)
-        stop_worker
-        echo "✅ worker 已停"
+        run_openvox stop
         ;;
 
     status)
-        if lsof -i:$WORKER_PORT >/dev/null 2>&1; then
-            pid=$(lsof -ti:$WORKER_PORT | head -1)
-            echo "✅ worker 在跑（pid $pid，端口 $WORKER_PORT）"
-            echo "日志：$LOG"
-            echo ""
-            echo "最近 15 行："
-            tail -15 "$LOG"
-        else
-            echo "❌ worker 没在跑"
-            echo "启动：./scripts/start.sh"
-        fi
+        run_openvox status
         ;;
 
     *)
         echo "用法：$0 [start|fg|stop|status]"
         echo ""
-        echo "  start   - 后台启动（默认）"
+        echo "  start   - 启动 worker（受管；不会碰本机其它 LiveKit 进程）"
         echo "  fg      - 前台启动（实时日志）"
-        echo "  stop    - 停止 worker"
-        echo "  status  - 查看状态 + 最近日志"
+        echo "  stop    - 停止受管的 agentd"
+        echo "  status  - 查看 provider 状态"
         exit 1
         ;;
 esac

@@ -1,0 +1,36 @@
+{
+  "name": "agentd",
+  "version": "0.1.0",
+  "description": "Local self-hosted agent daemon bridging ACP-compatible coding CLIs to an OpenAI-compatible REST + ACP API",
+  "type": "module",
+  "bin": {
+    "agentd": "./dist/index.js"
+  },
+  "main": "./dist/daemon.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "verify": "bash scripts/verify.sh",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "1.2.1",
+    "@fastify/rate-limit": "^10.0.0",
+    "fastify": "^5.0.0",
+    "ndjson": "^2.0.0",
+    "pino": "^9.4.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.5",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.2"
+  }
+}

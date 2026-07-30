@@ -90,7 +90,7 @@ def _make_none_choices_chunk() -> ChatCompletionChunk:
 
 def test_filter_drops_none_choices_chunks():
     """_FilterNoneChoices 必须跳过 choices=None 的块，保留其他。"""
-    from main import _FilterNoneChoices
+    from openvox_worker.main import _FilterNoneChoices
 
     good1 = _make_valid_chunk("first")
     bad = _make_none_choices_chunk()
@@ -107,7 +107,7 @@ def test_filter_drops_none_choices_chunks():
 
 def test_filter_aclose_propagates():
     """_FilterNoneChoices.aclose 必须调到 inner 的 aclose。"""
-    from main import _FilterNoneChoices
+    from openvox_worker.main import _FilterNoneChoices
 
     inner = _FakeStream([])
     filtered = _FilterNoneChoices(inner)
@@ -120,9 +120,9 @@ def test_filter_is_patched_on_openai_sdk():
     # 重新加载保证拿到最新 patch
     import sys
     for mod in list(sys.modules):
-        if mod == "main" or mod.startswith("openai"):
+        if mod == "openvox_worker.main" or mod.startswith("openai"):
             del sys.modules[mod]
-    import main  # noqa: F401
+    import openvox_worker.main  # noqa: F401
     from openai.resources.chat.completions import AsyncCompletions
     assert AsyncCompletions.create is main._safe_create, (
         "patch not applied: AsyncCompletions.create is still original"
@@ -133,7 +133,7 @@ def test_filter_is_patched_on_openai_sdk():
 
 
 def _make_fake_config() -> "Config":
-    from config import Config
+    from openvox_worker.config import Config
     return Config({
         "volcengine": {
             "stt": {"app_id": "stt-id", "access_token": "stt-token"},
@@ -151,7 +151,7 @@ def _make_fake_config() -> "Config":
 @pytest.fixture
 def fake_config(monkeypatch):
     """注入 fake Config 到 main，绕开 ~/.openvox/config.json。"""
-    import main
+    import openvox_worker.main
     monkeypatch.setattr(main, "_cfg", _make_fake_config())
     return main._cfg
 
@@ -166,7 +166,7 @@ def test_llm_chat_survives_none_choices_chunk(fake_config, monkeypatch):
     - 调 llm.chat()，期望 _safe_create → _orig_create（被 mock） → 流过滤 →
       至少一个有效 ChatChunk 透传
     """
-    import main
+    import openvox_worker.main
 
     bad_chunk = _make_none_choices_chunk()
     good_chunk = _make_valid_chunk("你好", finish_reason="stop")

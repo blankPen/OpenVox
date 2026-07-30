@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from config import Config, ConfigError, get_config, reset_config, set_config
+from openvox_worker.config import Config, ConfigError, get_config, reset_config, set_config
 
 
 # ───────── 单元测试：Config 自身 ─────────
@@ -123,6 +123,6 @@ def test_reset_config_clears_cache(monkeypatch):
 def test_default_path_is_openvox_config(monkeypatch):
     """没设 OPENVOX_CONFIG 时默认读 ~/.openvox/config.json。"""
     monkeypatch.delenv("OPENVOX_CONFIG", raising=False)
-    import config as cfg_module
+    import openvox_worker.config as cfg_module
     expected = Path("~/.openvox/config.json").expanduser()
     assert cfg_module.CONFIG_PATH == expected
