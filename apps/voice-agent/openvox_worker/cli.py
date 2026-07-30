@@ -179,8 +179,10 @@ def init_config(
     llm = data.setdefault("llm", {})
     llm["provider"] = provider
 
-    section = data.setdefault(provider, {})
-    for key, value in PROVIDER_DEFAULTS.get(provider, {}).items():
+    # Write defaults under the backend section (e.g. agentd.*), not tool name.
+    backend = PROVIDER_ALIASES.get(provider, provider)
+    section = data.setdefault(backend, {})
+    for key, value in PROVIDER_DEFAULTS.get(backend, {}).items():
         section.setdefault(key, value)
 
     if interactive and provider in SUPPORTED_PROVIDERS:
@@ -198,15 +200,17 @@ def init_config(
 
 
 def _detect_providers() -> dict:
-    """Scan PATH for available LLM backends and return {provider: label}."""
+    """Scan PATH for available LLM tools and return {provider: label}.
+
+    hermes is detected directly. claude, codex, openclaw are detected as
+    individual tools (agentd is auto-started internally for these).
+    """
     found = {}
     if shutil.which("hermes") is not None:
         found["hermes"] = "Hermes (local gateway)"
-    # agentd is usable if any ACP-compatible CLI is on PATH.
-    agentd_bins = {"claude": "Claude Code", "codex": "Codex", "openclaw": "OpenClaw"}
-    agentd_found = [label for binary, label in agentd_bins.items() if shutil.which(binary) is not None]
-    if agentd_found:
-        found["agentd"] = "agentd (ACP bridge) — " + ", ".join(agentd_found)
+    for binary, label in [("claude", "Claude Code"), ("codex", "Codex"), ("openclaw", "OpenClaw")]:
+        if shutil.which(binary) is not None:
+            found[binary] = label
     return found
 
 
@@ -270,6 +274,11 @@ class _WorkerLauncher:
 # ───────── Orchestration ─────────
 
 
+def _resolve_backend(provider: str) -> str:
+    """Map a user-facing provider name to a runtime backend type."""
+    return PROVIDER_ALIASES.get(provider, provider)
+
+
 def orchestrate_start(
     cfg: Config,
     *,
@@ -280,28 +289,29 @@ def orchestrate_start(
 ) -> int:
     """Bring up the selected backend then launch the worker.
 
-    Order is fixed: reject planned/unknown providers → Hermes readiness or
+    Order is fixed: resolve provider → backend → Hermes readiness or
     agentd start → worker launch. Any exception reverse-stops the processes
     this call owns (only ``agentd`` is owned; the external Hermes gateway is
     never stopped) before re-raising.
     """
     provider = cfg.get("llm.provider", "hermes")
+    backend = _resolve_backend(provider)
     if provider in PLANNED_PROVIDERS:
         raise PlannedProviderError(
             f"llm provider {provider} is planned, not yet supported"
         )
-    if provider not in SUPPORTED_PROVIDERS:
-        raise ConfigError("unknown llm provider")
 
     owned: list[Any] = []
     try:
-        if provider == "hermes":
+        if backend not in ("hermes", "agentd"):
+            raise ConfigError("unknown llm provider")
+        if backend == "hermes":
             readiness = hermes.ensure_ready(auto_start=auto_start)
             if not readiness.ready:
                 raise HermesSetupError(
                     f"hermes gateway not ready: {readiness.status} ({readiness.detail})"
                 )
-        else:  # agentd
+        else:  # agentd (for claude, codex, openclaw)
             agentd.start()
             owned.append(agentd)
         worker.start()
