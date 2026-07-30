@@ -140,11 +140,29 @@ def init_config(
     """
     data = _read_existing(path)
     if provider is None:
-        if interactive and _HAVE_QUESTIONARY:
-            choices = [questionary.Choice(title=k, value=k) for k in ALL_PROVIDERS]
-            provider = questionary.select("Select LLM provider", choices=choices).ask()
+        if interactive:
+            detected = _detect_providers()
+            candidates = [(k, detected.get(k, k)) for k in ALL_PROVIDERS if k in detected]
+            if not candidates:
+                candidates = [(k, {
+                    "hermes": "hermes (local gateway)",
+                    "agentd": "agentd (ACP bridge)",
+                    "codex": "codex (planned)",
+                    "openclaw": "openclaw (planned)",
+                }.get(k, k)) for k in ALL_PROVIDERS]
+            if _HAVE_QUESTIONARY:
+                choices = [questionary.Choice(title=label, value=p) for p, label in candidates]
+                provider = questionary.select("Select LLM provider", choices=choices).ask()
+            else:
+                for i, (p, label) in enumerate(candidates, 1):
+                    print(f"  [{i}] {label}")
+                raw = input_fn("select provider [1]: ").strip()
+                idx = int(raw) - 1 if raw.isdigit() else 0
+                if idx < 0 or idx >= len(candidates):
+                    idx = 0
+                provider = candidates[idx][0]
         else:
-            entered = input_fn(f"LLM provider {list(ALL_PROVIDERS)} [hermes]: ").strip()
+            entered = input_fn(f"LLM provider [hermes]: ").strip()
             provider = entered or "hermes"
     if provider not in ALL_PROVIDERS:
         raise ConfigError("unknown llm provider")
@@ -336,52 +354,23 @@ def _cmd_init(args, *, out, err) -> int:
 
 
 def _cmd_start(args, *, out, err) -> int:
-    # Auto-detect providers if no config exists or no provider configured.
     config_path = _config_path(args.config)
-    cfg = None
     try:
         cfg = _load_config(args.config)
     except ConfigError:
-        pass
-
-    provider = args.provider
-    if provider is None and cfg is not None:
-        provider = cfg.get("llm.provider")
-
-    if provider is None:
-        detected = _detect_providers()
-        if not detected:
+        if args.provider is None:
             print(
-                "error: no LLM provider found on PATH. "
-                "Install hermes, claude, or codex first.",
+                "error: config not found. Run 'openvox init' first, "
+                "or pass '--provider' to auto-configure.",
                 file=err,
             )
             return 2
-        available = sorted(detected.keys())
-        if len(available) == 1:
-            provider = available[0]
-            print(f"auto-detected: {detected[provider]}", file=out)
-        else:
-            if sys.__stdin__.isatty() and _HAVE_QUESTIONARY:
-                choices = [questionary.Choice(title=v, value=k) for k, v in detected.items()]
-                choices = sorted(choices, key=lambda c: c.value)
-                provider = questionary.select("Select LLM provider", choices=choices).ask()
-            else:
-                print("detected providers:", file=out)
-                for i, k in enumerate(available, 1):
-                    print(f"  [{i}] {detected[k]}", file=out)
-                raw = input(f"select provider [1]: ").strip()
-                idx = int(raw) - 1 if raw.isdigit() else 0
-                if idx < 0 or idx >= len(available):
-                    idx = 0
-                provider = available[idx]
-
-        # Auto-init before starting.
+        # --provider given with no config → auto-init.
         if config_path is None:
             config_path = _resolve_default_path()
         init_config(
             config_path,
-            provider=provider,
+            provider=args.provider,
             interactive=False,
             output=lambda msg: print(msg, file=out),
         )
