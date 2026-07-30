@@ -30,6 +30,7 @@ import getpass
 import json
 import os
 import subprocess
+import shutil
 import sys
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -153,6 +154,20 @@ def init_config(
     _atomic_write_json(path, data)
     output(f"wrote runtime config for provider={provider} -> {path}")
     return Config(data)
+
+
+def _detect_providers() -> dict:
+    """Scan PATH for available LLM providers and return {provider: label}."""
+    found = {}
+    for provider, binary, label in [
+        ("hermes", "hermes", "Hermes (local gateway)"),
+        ("claude", "claude", "claude (Claude Code)"),
+        ("codex", "codex", "codex (Codex)"),
+        ("openclaw", "openclaw", "openclaw (OpenClaw)"),
+    ]:
+        if shutil.which(binary) is not None:
+            found[provider] = label
+    return found
 
 
 # ───────── Runtime construction (real dependencies) ─────────
@@ -307,13 +322,58 @@ def _cmd_init(args, *, out, err) -> int:
 
 
 def _cmd_start(args, *, out, err) -> int:
+    # Auto-detect providers if no config exists or no provider configured.
+    config_path = _config_path(args.config)
+    cfg = None
     try:
         cfg = _load_config(args.config)
+    except ConfigError:
+        pass
+
+    provider = args.provider
+    if provider is None and cfg is not None:
+        provider = cfg.get("llm.provider")
+
+    if provider is None:
+        detected = _detect_providers()
+        if not detected:
+            print(
+                "error: no LLM provider found on PATH. "
+                "Install hermes, claude, or codex first.",
+                file=err,
+            )
+            return 2
+        available = sorted(detected.keys())
+        if len(available) == 1:
+            provider = available[0]
+            print(f"auto-detected: {detected[provider]}", file=out)
+        else:
+            print("detected providers:", file=out)
+            for i, k in enumerate(available, 1):
+                print(f"  [{i}] {detected[k]}", file=out)
+            raw = input(f"select provider [1]: ").strip()
+            idx = int(raw) - 1 if raw.isdigit() else 0
+            if idx < 0 or idx >= len(available):
+                idx = 0
+            provider = available[idx]
+
+        # Auto-init before starting.
+        if config_path is None:
+            config_path = _resolve_default_path()
+        init_config(
+            config_path,
+            provider=provider,
+            interactive=False,
+            output=lambda msg: print(msg, file=out),
+        )
+        cfg = Config.load(config_path)
+
+    try:
         return orchestrate_start(
             cfg,
             hermes=_build_hermes(cfg),
             agentd=_build_agentd(cfg),
-            worker=_WorkerLauncher(config_path=_config_path(args.config)),
+            worker=_WorkerLauncher(config_path=config_path),
             auto_start=args.yes,
         )
     except PlannedProviderError as exc:
@@ -422,6 +482,12 @@ def build_parser() -> argparse.ArgumentParser:
     start_p = sub.add_parser("start", help="start backend + LiveKit worker")
     _add_config(start_p)
     start_p.add_argument("--yes", action="store_true", help="auto-start backends")
+    start_p.add_argument(
+        "--provider", "--llm",
+        choices=["hermes", "agentd", "claude", "codex", "openclaw"],
+        default=None,
+        help="LLM backend (auto-detect if omitted)",
+    )
     start_p.set_defaults(handler=_cmd_start)
 
     stop_p = sub.add_parser("stop", help="stop supervised agentd")
