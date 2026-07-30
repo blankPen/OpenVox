@@ -1,0 +1,373 @@
+name: Release
+
+# Tag a commit with `vX.Y.Z` (or run this workflow manually with a tag input)
+# and this pipeline builds every distributable artifact, attaches it to a
+# GitHub Release, and prints install commands.
+#
+# Required secret for tag-triggered runs: GITHUB_TOKEN (auto-provided).
+# Optional inputs (workflow_dispatch): tag (defaults to the latest v* tag).
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.2.0). Leave empty for a prerelease based on HEAD."
+        required: false
+        default: ""
+
+permissions:
+  contents: write   # create / upload release assets
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ── meta: derive version + tag once, share via outputs ──────────
+  meta:
+    name: Compute release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
+      commit: ${{ steps.meta.outputs.commit }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          fetch-depth: 1
+
+      - id: meta
+        run: |
+          set -euo pipefail
+          # workflow_dispatch passes the tag in as input; tag-push events
+          # expose it via GITHUB_REF_NAME. Fall back to a synthetic prerelease.
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME}"
+          elif [[ -n "${{ inputs.tag }}" ]]; then
+            tag="${{ inputs.tag }}"
+          else
+            short="$(git rev-parse --short HEAD)"
+            tag="v0.0.0-${short}"
+          fi
+
+          # Strip leading 'v' for use in artifact filenames.
+          if [[ "${tag}" =~ ^v(.+)$ ]]; then
+            version="${BASH_REMATCH[1]}"
+          else
+            version="${tag}"
+          fi
+
+          # Heuristic: tags with a dash (e.g. v0.2.0-rc1, v0.0.0-abc1234)
+          # are marked as prerelease.
+          if [[ "${version}" == *-* ]]; then
+            is_prerelease="true"
+          else
+            is_prerelease="false"
+          fi
+
+          commit="$(git rev-parse --short HEAD)"
+          echo "tag=${tag}"            >> "$GITHUB_OUTPUT"
+          echo "version=${version}"    >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=${is_prerelease}" >> "$GITHUB_OUTPUT"
+          echo "commit=${commit}"      >> "$GITHUB_OUTPUT"
+          echo "release: tag=${tag} version=${version} prerelease=${is_prerelease}"
+
+  # ── agentd: Node CLI, .tgz package ──────────────────────────────
+  agentd:
+    name: agentd (${{ matrix.os }})
+    needs: meta
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4
+        with:
+          node-version: "20"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@a7487c7cbf78bb6e0cdbd616226cb0e236d7f1cb # v4
+        with:
+          version: 9
+
+      - name: Install agentd deps
+        working-directory: apps/agentd
+        run: pnpm install --frozen-lockfile
+
+      - name: Build agentd (TypeScript → dist/)
+        working-directory: apps/agentd
+        run: pnpm build
+
+      - name: Pack agentd tarball
+        working-directory: apps/agentd
+        # npm pack outputs "agentd-0.1.0.tgz" — capture into a stable name.
+        run: |
+          set -euo pipefail
+          name="$(npm pack 2>/dev/null | tail -1)"
+          mv "$name" "../../artifacts/agentd-${{ needs.meta.outputs.version }}-${{ matrix.os == 'windows-latest' && 'windows' || matrix.os == 'macos-latest' && 'macos' || 'linux' }}.tgz"
+        shell: bash
+
+      - name: Upload agentd tarball
+        uses: actions/upload-artifact@4b15cb995cd5f0e45f55c6e1e0e94e4a09b9c161 # v4
+        with:
+          name: agentd-${{ needs.meta.outputs.version }}-${{ runner.os == 'Windows' && 'windows' || runner.os == 'macOS' && 'macos' || 'linux' }}
+          path: artifacts/agentd-${{ needs.meta.outputs.version }}-*.tgz
+          if-no-files-found: error
+          retention-days: 14
+
+  # ── openvox: Python wheel + sdist ───────────────────────────────
+  openvox:
+    name: openvox (${{ matrix.os }})
+    needs: meta
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.11"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c # v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build
+
+      - name: Build openvox wheel + sdist
+        working-directory: apps/voice-agent
+        run: |
+          set -euo pipefail
+          python -m build
+          mkdir -p ../../artifacts
+          mv dist/openvox-*.whl  ../../artifacts/
+          mv dist/openvox-*.tar.gz ../../artifacts/
+
+      - name: Upload openvox artifacts
+        uses: actions/upload-artifact@4b15cb995cd5f0e45f55c6e1e0e94e4a09b9c161 # v4
+        with:
+          name: openvox-${{ needs.meta.outputs.version }}-${{ runner.os == 'Windows' && 'windows' || runner.os == 'macOS' && 'macos' || 'linux' }}
+          path: |
+            artifacts/openvox-*.whl
+            artifacts/openvox-*.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  # ── voice-client android: APK (debug + release) ─────────────────
+  client-android:
+    name: voice-client android
+    needs: meta
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/voice-client
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@c3cd0e4f63d4ce5c3552da6b5ab14e96a93d8d2c # v4
+        with:
+          distribution: zulu
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@ead4735e1f20e5c7e0fc153a1c4b1c6c54a3acab # v2
+        with:
+          channel: stable
+          flutter-version: "3.44.6"
+
+      - name: Cache pub dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+            apps/voice-client/.dart_tool
+          key: pub-${{ runner.os }}-${{ hashFiles('apps/voice-client/pubspec.lock') }}
+          restore-keys: |
+            pub-${{ runner.os }}-
+
+      - name: Install pub dependencies
+        working-directory: apps/voice-client
+        run: flutter pub get
+
+      - name: Run flutter analyze (warnings allowed)
+        working-directory: apps/voice-client
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+
+      - name: Build debug APK
+        working-directory: apps/voice-client
+        run: flutter build apk --debug
+
+      - name: Build release APK (unsigned)
+        working-directory: apps/voice-client
+        run: flutter build apk --release
+        env:
+          # Skip the dependency validation deprecation that otherwise warns
+          # loudly; AGP/Gradle/Kotlin versions are tracked via gradle-wrapper.
+          FLUTTER_SUPPRESS_ANALYTICS: "true"
+
+      - name: Stage APK artifacts
+        working-directory: apps/voice-client
+        run: |
+          set -euo pipefail
+          mkdir -p ../../artifacts
+          cp build/app/outputs/flutter-apk/app-debug.apk   "../../artifacts/voice-client-${{ needs.meta.outputs.version }}-android-debug.apk"
+          cp build/app/outputs/flutter-apk/app-release.apk "../../artifacts/voice-client-${{ needs.meta.outputs.version }}-android-release-unsigned.apk"
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@4b15cb995cd5f0e45f55c6e1e0e94e4a09b9c161 # v4
+        with:
+          name: voice-client-${{ needs.meta.outputs.version }}-android
+          path: artifacts/voice-client-*-android-*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  # ── voice-client ios: .app (debug, no codesign) ─────────────────
+  client-ios:
+    name: voice-client ios
+    needs: meta
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: apps/voice-client
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Set up Node.js (for CocoaPods scripts)
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4
+        with:
+          node-version: "20"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@ead4735e1f20e5c7e0fc153a1c4b1c6c54a3acab # v2
+        with:
+          channel: stable
+          flutter-version: "3.44.6"
+
+      - name: Cache pub dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+            apps/voice-client/.dart_tool
+          key: pub-${{ runner.os }}-${{ hashFiles('apps/voice-client/pubspec.lock') }}
+          restore-keys: |
+            pub-${{ runner.os }}-
+
+      - name: Install pub dependencies
+        working-directory: apps/voice-client
+        run: flutter pub get
+
+      - name: Build iOS .app (debug, no codesign)
+        working-directory: apps/voice-client
+        # --no-codesign produces the iphoneos slice without provisioning.
+        # --simulator additionally produces the simulator slice so CI can
+        # run on either architecture.
+        run: flutter build ios --debug --no-codesign --simulator
+        env:
+          # The local scripts may reference $HOME/.pub-cache for patrol.
+          PUB_CACHE: ${{ github.workspace }}/.pub-cache
+
+      - name: Stage iOS artifacts
+        working-directory: apps/voice-client
+        run: |
+          set -euo pipefail
+          mkdir -p ../../artifacts
+          # Bundle both simulator + device slices for flexibility.
+          if [[ -d build/ios/iphonesimulator/Runner.app ]]; then
+            ditto -c -k --sequesterRsrc --keepParent \
+              build/ios/iphonesimulator/Runner.app \
+              "../../artifacts/voice-client-${{ needs.meta.outputs.version }}-ios-simulator.zip"
+          fi
+          if [[ -d build/ios/iphoneos/Runner.app ]]; then
+            ditto -c -k --sequesterRsrc --keepParent \
+              build/ios/iphoneos/Runner.app \
+              "../../artifacts/voice-client-${{ needs.meta.outputs.version }}-ios-device.zip"
+          fi
+
+      - name: Upload iOS bundles
+        uses: actions/upload-artifact@4b15cb995cd5f0e45f55c6e1e0e94e4a09b9c161 # v4
+        with:
+          name: voice-client-${{ needs.meta.outputs.version }}-ios
+          path: artifacts/voice-client-*-ios-*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  # ── release: assemble GitHub release with all artifacts ─────────
+  release:
+    name: Publish GitHub release
+    needs: [meta, agentd, openvox, client-android, client-ios]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@fa0a91b85d4d404ac4e281ddaf3c368e79e5c658 # v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List collected artifacts
+        run: |
+          set -euo pipefail
+          echo "=== artifacts/ ==="
+          ls -lhR artifacts
+
+      - name: Publish release
+        uses: softprops/action-gh-release@69fea7d4c7818efc7535e0f8fc7f93b694f8b3c8 # v2
+        with:
+          tag_name: ${{ needs.meta.outputs.tag }}
+          name: OpenVox ${{ needs.meta.outputs.tag }}
+          draft: false
+          prerelease: ${{ needs.meta.outputs.is_prerelease == 'true' }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/**/*.tgz
+            artifacts/**/*.whl
+            artifacts/**/*.tar.gz
+            artifacts/**/*.apk
+            artifacts/**/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Print install instructions
+        if: success()
+        run: |
+          set -euo pipefail
+          tag="${{ needs.meta.outputs.tag }}"
+          echo
+          echo "## Install (release $tag)"
+          echo
+          echo "### agentd (Node CLI)"
+          echo '```'
+          echo "# pick your platform: agentd-${tag}-linux.tgz | macos.tgz | windows.tgz"
+          echo "curl -sSL -o agentd.tgz \\"
+          echo "  https://github.com/${{ github.repository }}/releases/download/$tag/agentd-${{ needs.meta.outputs.version }}-\$(uname | tr '[:upper:]' '[:lower:]').tgz"
+          echo "npm install -g ./agentd.tgz     # or: pnpm add -g ./agentd.tgz"
+          echo '```'
+          echo
+          echo "### openvox (Python CLI)"
+          echo '```'
+          echo "pip install --user openvox-${{ needs.meta.outputs.version }}-py3-none-any.whl"
+          echo "# or: pipx install openvox-${{ needs.meta.outputs.version }}.tar.gz"
+          echo '```'
+          echo
+          echo "### voice-client (Android)"
+          echo '```'
+          echo "adb install voice-client-${{ needs.meta.outputs.version }}-android-release-unsigned.apk"
+          echo '```'
+          echo
+          echo "### voice-client (iOS)"
+          echo '```'
+          echo "unzip voice-client-${{ needs.meta.outputs.version }}-ios-device.zip   # → Runner.app"
+          echo "# sideload with ios-deploy / Xcode / AltStore"
+          echo '```'

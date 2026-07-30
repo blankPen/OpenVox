@@ -1,0 +1,177 @@
+name: CI
+
+# Per-PR smoke build for each app. This is intentionally lighter than
+# .github/workflows/release.yml (no matrix, no GitHub release publish):
+# its job is to catch breakages early, not to produce downloadable assets.
+
+on:
+  pull_request:
+    paths:
+      - "apps/**"
+      - "tooling/scripts/**"
+      - ".github/workflows/ci.yml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── agentd typecheck + tests + build ────────────────────────────
+  agentd:
+    name: agentd (lint + test + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4
+        with:
+          node-version: "20"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@a7487c7cbf78bb6e0cdbd616226cb0e236d7f1cb # v4
+        with:
+          version: 9
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('apps/agentd/pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-${{ runner.os }}-
+
+      - name: Install agentd deps
+        working-directory: apps/agentd
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck agentd
+        working-directory: apps/agentd
+        run: pnpm typecheck
+
+      - name: Test agentd
+        working-directory: apps/agentd
+        run: pnpm test
+
+      - name: Build agentd
+        working-directory: apps/agentd
+        run: pnpm build
+
+  # ── voice-agent: import smoke test + wheel build ────────────────
+  voice-agent:
+    name: voice-agent (test + wheel build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c # v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build
+
+      - name: Build openvox wheel + sdist
+        working-directory: apps/voice-agent
+        run: python -m build
+
+      - name: Verify openvox CLI is importable
+        working-directory: apps/voice-agent
+        run: |
+          set -euo pipefail
+          python -m pip install --force-reinstall dist/openvox-*.whl
+          openvox --help | head -5
+
+  # ── voice-client android smoke build ────────────────────────────
+  client-android:
+    name: voice-client android (analyze + apk)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/voice-client
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@c3cd0e4f63d4ce5c3552da6b5ab14e96a93d8d2c # v4
+        with:
+          distribution: zulu
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@ead4735e1f20e5c7e0fc153a1c4b1c6c54a3acab # v2
+        with:
+          channel: stable
+          flutter-version: "3.44.6"
+
+      - name: Cache pub dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+            apps/voice-client/.dart_tool
+          key: pub-${{ runner.os }}-${{ hashFiles('apps/voice-client/pubspec.lock') }}
+          restore-keys: |
+            pub-${{ runner.os }}-
+
+      - name: Install pub dependencies
+        working-directory: apps/voice-client
+        run: flutter pub get
+
+      - name: Run flutter analyze (warnings allowed)
+        working-directory: apps/voice-client
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+
+      - name: Build debug APK
+        working-directory: apps/voice-client
+        run: flutter build apk --debug
+
+      - name: Upload APK for inspection
+        uses: actions/upload-artifact@4b15cb995cd5f0e45f55c6e1e0e94e4a09b9c161 # v4
+        with:
+          name: ci-voice-client-android-apk
+          path: apps/voice-client/build/app/outputs/flutter-apk/app-debug.apk
+          retention-days: 3
+
+  # ── voice-client ios smoke build ────────────────────────────────
+  client-ios:
+    name: voice-client ios (no-codesign .app)
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: apps/voice-client
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4
+        with:
+          node-version: "20"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@ead4735e1f20e5c7e0fc153a1c4b1c6c54a3acab # v2
+        with:
+          channel: stable
+          flutter-version: "3.44.6"
+
+      - name: Cache pub dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+            apps/voice-client/.dart_tool
+          key: pub-${{ runner.os }}-${{ hashFiles('apps/voice-client/pubspec.lock') }}
+          restore-keys: |
+            pub-${{ runner.os }}-
+
+      - name: Install pub dependencies
+        working-directory: apps/voice-client
+        run: flutter pub get
+
+      - name: Build iOS .app (simulator, no codesign)
+        working-directory: apps/voice-client
+        run: flutter build ios --debug --no-codesign --simulator
