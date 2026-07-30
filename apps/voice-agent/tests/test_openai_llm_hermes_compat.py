@@ -135,7 +135,6 @@ def test_filter_is_patched_on_openai_sdk():
 def _make_fake_config() -> "Config":
     from config import Config
     return Config({
-        "pipeline": "pipeline",
         "volcengine": {
             "stt": {"app_id": "stt-id", "access_token": "stt-token"},
             "tts": {"app_id": "tts-id", "access_token": "tts-token"},

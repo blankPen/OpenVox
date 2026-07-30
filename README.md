@@ -88,4 +88,4 @@ openvox/
 
 ## 状态
 
-骨架刚建。当前还没把 `~/workspace/agent-starter-flutter/` 和原 openvox 备份里的代码搬过来——等这一步你确认骨架 OK 再迁。
+骨架已就绪。`apps/voice-agent` 与 `apps/voice-client` 已迁入代码，可走「快速上手」跑通。后续 backlog 详见 [`openwiki/quickstart.md`](openwiki/quickstart.md) → Backlog。

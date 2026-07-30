@@ -1,4 +1,18 @@
-# livekit-plugins-volcengine
+# livekit-plugins-volcengine（OpenVox 裁剪版）
+
+> **本仓库只 vendored STT 和 TTS 两个类**。`LLM` 和 `RealtimeModel` 类已从源码中删除 —— 这份 README 是上游 `di-osc/livekit-plugins-chinese` 的原文，里面的 `volcengine.LLM` / `volcengine.RealtimeModel` 示例在 OpenVox 里 `import` 会 `ImportError`，不要照抄。
+>
+> OpenVox 实际用的入口：
+> ```python
+> from livekit.plugins.volcengine import STT, TTS
+> ```
+> LLM 一段走 `livekit-plugins-openai` 的 `openai.LLM` 指向本地 Hermes api_server，与本插件解耦。
+>
+> 上游原文（保留参考用）见下方。
+
+---
+
+# livekit-plugins-volcengine（原文）
 
 [![PyPI version](https://badge.fury.io/py/livekit-plugins-volcengine.svg)](https://pypi.org/project/livekit-plugins-volcengine/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
