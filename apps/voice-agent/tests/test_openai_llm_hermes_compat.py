@@ -122,7 +122,7 @@ def test_filter_is_patched_on_openai_sdk():
     for mod in list(sys.modules):
         if mod == "openvox_worker.main" or mod.startswith("openai"):
             del sys.modules[mod]
-    import openvox_worker.main  # noqa: F401
+    import openvox_worker.main as main  # noqa: F401
     from openai.resources.chat.completions import AsyncCompletions
     assert AsyncCompletions.create is main._safe_create, (
         "patch not applied: AsyncCompletions.create is still original"
@@ -151,7 +151,7 @@ def _make_fake_config() -> "Config":
 @pytest.fixture
 def fake_config(monkeypatch):
     """注入 fake Config 到 main，绕开 ~/.openvox/config.json。"""
-    import openvox_worker.main
+    import openvox_worker.main as main
     monkeypatch.setattr(main, "_cfg", _make_fake_config())
     return main._cfg
 
@@ -166,7 +166,7 @@ def test_llm_chat_survives_none_choices_chunk(fake_config, monkeypatch):
     - 调 llm.chat()，期望 _safe_create → _orig_create（被 mock） → 流过滤 →
       至少一个有效 ChatChunk 透传
     """
-    import openvox_worker.main
+    import openvox_worker.main as main
 
     bad_chunk = _make_none_choices_chunk()
     good_chunk = _make_valid_chunk("你好", finish_reason="stop")

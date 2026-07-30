@@ -38,7 +38,7 @@ def _make_fake_config() -> "Config":  # type: ignore[name-defined]  # noqa: F821
 @pytest.fixture
 def fake_config(monkeypatch):
     """Inject a fake Config into main so _build_session doesn't read ~/.openvox/config.json."""
-    import openvox_worker.main
+    import openvox_worker.main as main
     fake = _make_fake_config()
     monkeypatch.setattr(main, "_cfg", fake)
     return fake
@@ -46,12 +46,12 @@ def fake_config(monkeypatch):
 
 def test_pipeline_uses_openai_llm(fake_config):
     """pipeline 模式必须把 openai.LLM 构造出来，三个配置都来自 hermes 段。"""
-    import openvox_worker.main
+    import openvox_worker.main as main
 
     with patch("livekit.plugins.openai.LLM") as mock_llm, \
          patch("livekit.plugins.volcengine.STT") as mock_stt, \
          patch("livekit.plugins.volcengine.TTS") as mock_tts, \
-         patch("main.AgentSession") as mock_session:
+         patch("openvox_worker.main.AgentSession") as mock_session:
         main._build_session()
 
     # 必须真调 openai.LLM(...) 一次
@@ -70,12 +70,12 @@ def test_pipeline_uses_openai_llm(fake_config):
 
 def test_pipeline_uses_volcengine_stt_tts(fake_config):
     """pipeline 模式 STT / TTS 仍用火山引擎插件。"""
-    import openvox_worker.main
+    import openvox_worker.main as main
 
     with patch("livekit.plugins.openai.LLM"), \
          patch("livekit.plugins.volcengine.STT") as mock_stt, \
          patch("livekit.plugins.volcengine.TTS") as mock_tts, \
-         patch("main.AgentSession"):
+         patch("openvox_worker.main.AgentSession"):
         main._build_session()
 
     # 必须真调 volcengine.STT / volcengine.TTS

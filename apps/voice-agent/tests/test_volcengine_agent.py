@@ -13,6 +13,7 @@ Task 2 收尾测试，验证以下不变量：
 from __future__ import annotations
 
 import ast
+import importlib
 import asyncio
 import sys
 from pathlib import Path
@@ -32,7 +33,7 @@ def _load_main_module():
     for mod_name in list(sys.modules):
         if mod_name.startswith(("agent_persona", "agent_skills", "agent_extensions", "agent_memory")):
             del sys.modules[mod_name]
-    return __import__("openvox_worker.main")
+    return importlib.import_module("openvox_worker.main")
 
 
 # ---------------------------------------------------------------------------

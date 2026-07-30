@@ -54,6 +54,33 @@ SUPPORTED_PROVIDERS = ("hermes", "agentd", "claude")
 PLANNED_PROVIDERS = ("codex", "openclaw")
 ALL_PROVIDERS = SUPPORTED_PROVIDERS + PLANNED_PROVIDERS
 
+#: Providers shown in ``openvox init`` interactive selection. ``agentd`` is
+#: intentionally omitted - it is internal infrastructure surfaced through the
+#: individual tool names (claude / codex / openclaw).
+USER_FACING_PROVIDERS = ("hermes", "claude", "codex", "openclaw")
+
+#: Icons shown next to each provider in the init selection prompt.
+STATUS_ICONS = {
+    "installed": "✓",
+    "not installed": "✗",
+    "planned": "⏳",
+}
+
+#: Guidance printed when a provider is selected but is not ready.
+PROVIDER_GUIDANCE = {
+    "hermes": (
+        "Hermes CLI not found in PATH.\n"
+        "Install it with: pip install hermes"
+    ),
+    "claude": (
+        "Claude Code not found in PATH.\n"
+        "Install it from: https://claude.ai/download"
+    ),
+    "codex": "Codex support is planned but not yet implemented.",
+    "openclaw": "OpenClaw support is planned but not yet implemented.",
+}
+
+
 #: CLI-style names that map to backends.
 PROVIDER_ALIASES = {
     "claude": "agentd",
@@ -144,37 +171,53 @@ def init_config(
     :data:`PROVIDER_DEFAULTS`. In flag mode (``interactive=False``) no secret
     is read; in interactive mode the API key is collected via ``getpass`` and
     written to the file (mode ``0600``) but never printed.
+
+    When ``interactive=True`` and no ``--provider`` flag is given, the user is
+    presented with a status-aware prompt. Selecting a provider that is not
+    installed or is still planned prints guidance and raises :class:`ConfigError`
+    so a broken config is never written.
     """
     data = _read_existing(path)
+    detected = _detect_providers()
     if provider is None:
         if interactive:
-            detected = _detect_providers()
-            candidates = [(k, detected.get(k, k)) for k in ALL_PROVIDERS if k in detected]
-            if not candidates:
-                candidates = [(k, {
-                    "hermes": "hermes (local gateway)",
-                    "agentd": "agentd (ACP bridge)",
-                    "codex": "codex (planned)",
-                    "openclaw": "openclaw (planned)",
-                }.get(k, k)) for k in ALL_PROVIDERS]
+            candidates = [(p, detected[p]) for p in USER_FACING_PROVIDERS]
             if _HAVE_QUESTIONARY:
-                choices = [questionary.Choice(title=label, value=p) for p, label in candidates]
+                choices = [
+                    questionary.Choice(
+                        title=f"{STATUS_ICONS[info['status']]} {info['label']}",
+                        value=p,
+                    )
+                    for p, info in candidates
+                ]
                 provider = questionary.select("Select LLM provider", choices=choices).ask()
             else:
-                for i, (p, label) in enumerate(candidates, 1):
-                    print(f"  [{i}] {label}")
+                for i, (p, info) in enumerate(candidates, 1):
+                    icon = STATUS_ICONS[info["status"]]
+                    print(f"  [{i}] {icon} {info['label']} ({info['status']})")
                 raw = input_fn("select provider [1]: ").strip()
                 idx = int(raw) - 1 if raw.isdigit() else 0
                 if idx < 0 or idx >= len(candidates):
                     idx = 0
                 provider = candidates[idx][0]
         else:
-            entered = input_fn(f"LLM provider [hermes]: ").strip()
+            entered = input_fn("LLM provider [hermes]: ").strip()
             provider = entered or "hermes"
+
+    original_provider = provider
     # Resolve CLI-style names (claude → agentd, etc.)
     provider = PROVIDER_ALIASES.get(provider, provider)
     if provider not in ALL_PROVIDERS:
         raise ConfigError("unknown llm provider")
+
+    # Surface guidance before writing a config that cannot run.
+    if original_provider in detected and detected[original_provider]["status"] != "installed":
+        guidance = PROVIDER_GUIDANCE.get(original_provider)
+        if guidance:
+            output(guidance)
+        raise ConfigError(
+            f"llm provider {original_provider} is {detected[original_provider]['status']}"
+        )
 
     llm = data.setdefault("llm", {})
     llm["provider"] = provider
@@ -200,17 +243,24 @@ def init_config(
 
 
 def _detect_providers() -> dict:
-    """Scan PATH for available LLM tools and return {provider: label}.
+    """Scan PATH for available LLM tools and return {provider: {label, status}}.
 
-    hermes is detected directly. claude, codex, openclaw are detected as
-    individual tools (agentd is auto-started internally for these).
+    hermes is detected directly. claude, codex, openclaw are presented as
+    individual tools; agentd is internal and is not surfaced here.
     """
     found = {}
     if shutil.which("hermes") is not None:
-        found["hermes"] = "Hermes (local gateway)"
-    for binary, label in [("claude", "Claude Code"), ("codex", "Codex"), ("openclaw", "OpenClaw")]:
-        if shutil.which(binary) is not None:
-            found[binary] = label
+        found["hermes"] = {"label": "Hermes (local gateway)", "status": "installed"}
+    else:
+        found["hermes"] = {"label": "Hermes (local gateway)", "status": "not installed"}
+
+    if shutil.which("claude") is not None:
+        found["claude"] = {"label": "Claude Code", "status": "installed"}
+    else:
+        found["claude"] = {"label": "Claude Code", "status": "not installed"}
+
+    found["codex"] = {"label": "Codex", "status": "planned"}
+    found["openclaw"] = {"label": "OpenClaw", "status": "planned"}
     return found
 
 
@@ -335,18 +385,19 @@ def collect_status(cfg: Config, *, hermes: Any, agentd: Any) -> dict:
     """Assemble a secret-free status payload for all known providers."""
     readiness = hermes.inspect()
     agentd_state = agentd.status()
+    detected = _detect_providers()
+    providers = {
+        name: {"status": info["status"]}
+        for name, info in detected.items()
+    }
+    providers["hermes"]["detail"] = readiness.detail
+    providers["agentd"] = {
+        "status": "running" if agentd_state.get("running") else "stopped",
+        "pid": agentd_state.get("pid"),
+    }
     return {
         "selected": cfg.get("llm.provider", "hermes"),
-        "providers": {
-            "hermes": {"status": readiness.status, "detail": readiness.detail},
-            "agentd": {
-                "status": "running" if agentd_state.get("running") else "stopped",
-                "pid": agentd_state.get("pid"),
-            },
-            "codex": {"status": "planned"},
-            "openclaw": {"status": "planned"},
-            "claude": {"status": "planned"},
-        },
+        "providers": providers,
     }
 
 

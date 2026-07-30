@@ -202,3 +202,76 @@ def test_status_reports_selected_provider(tmp_path, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["selected"] == "agentd"
     assert set(payload["providers"]) >= {"hermes", "agentd", "codex", "openclaw"}
+
+# ───────── Provider detection / status badges ─────────
+
+
+def test_detect_providers_returns_status_dict(monkeypatch):
+    """_detect_providers 返回 {provider: {label, status}}；agentd 不暴露。"""
+    monkeypatch.setattr(
+        openvox_cli.shutil,
+        "which",
+        lambda name: "/opt/bin/hermes" if name == "hermes" else None,
+    )
+    detected = openvox_cli._detect_providers()
+    assert detected["hermes"] == {
+        "label": "Hermes (local gateway)",
+        "status": "installed",
+    }
+    assert detected["claude"] == {
+        "label": "Claude Code",
+        "status": "not installed",
+    }
+    assert detected["codex"] == {"label": "Codex", "status": "planned"}
+    assert detected["openclaw"] == {"label": "OpenClaw", "status": "planned"}
+    assert "agentd" not in detected
+
+
+def test_init_rejects_not_installed_provider_with_guidance(
+    tmp_path, monkeypatch, capsys
+):
+    """显式选 not-installed provider 时打印安装引导并拒绝写配置。"""
+    monkeypatch.setattr(openvox_cli.shutil, "which", lambda _x: None)
+    path = tmp_path / "config.json"
+    rc = openvox_cli.main(["init", "--config", str(path), "--provider", "hermes"])
+    out, err = capsys.readouterr()
+    assert rc == 2
+    assert "not installed" in err
+    assert "pip install hermes" in out
+    assert not path.exists()
+
+
+def test_init_rejects_planned_provider_with_guidance(tmp_path, capsys):
+    """显式选 planned provider 时打印计划提示并拒绝写配置。"""
+    path = tmp_path / "config.json"
+    rc = openvox_cli.main(["init", "--config", str(path), "--provider", "codex"])
+    out, err = capsys.readouterr()
+    assert rc == 2
+    assert "planned" in err
+    assert "planned but not yet implemented" in out
+    assert not path.exists()
+
+
+def test_init_interactive_fallback_shows_status_badges(
+    tmp_path, monkeypatch, capsys
+):
+    """无 questionary 时 fallback 菜单显示状态 badge。"""
+    monkeypatch.setattr(openvox_cli, "_HAVE_QUESTIONARY", False)
+    monkeypatch.setattr(
+        openvox_cli.shutil,
+        "which",
+        lambda name: "/opt/bin/hermes" if name == "hermes" else None,
+    )
+    inputs = iter(["2"])  # select Claude Code (not installed)
+    path = tmp_path / "config.json"
+    with pytest.raises(ConfigError, match=r"llm provider claude is not installed"):
+        openvox_cli.init_config(
+            path,
+            provider=None,
+            interactive=True,
+            input_fn=lambda _: next(inputs),
+            output=lambda msg: print(msg),
+        )
+    out, _ = capsys.readouterr()
+    assert "✓ Hermes (local gateway) (installed)" in out
+    assert "✗ Claude Code (not installed)" in out
