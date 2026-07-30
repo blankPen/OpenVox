@@ -41,6 +41,12 @@ from .hermes_runtime import HermesConfig, HermesRuntime, HermesSetupError
 from .llm_provider import PlannedProviderError
 from .process_runtime import ProcessSupervisor
 
+try:
+    import questionary
+    _HAVE_QUESTIONARY = True
+except ImportError:
+    _HAVE_QUESTIONARY = False
+
 
 # ───────── Provider catalogue ─────────
 
@@ -134,8 +140,12 @@ def init_config(
     """
     data = _read_existing(path)
     if provider is None:
-        entered = input_fn(f"LLM provider {list(SUPPORTED_PROVIDERS)} [hermes]: ").strip()
-        provider = entered or "hermes"
+        if interactive and _HAVE_QUESTIONARY:
+            choices = [questionary.Choice(title=v, value=k) for k, v in PROVIDER_DEFAULTS.items() if k in ALL_PROVIDERS]
+            provider = questionary.select("Select LLM provider", choices=choices).ask()
+        else:
+            entered = input_fn(f"LLM provider {list(ALL_PROVIDERS)} [hermes]: ").strip()
+            provider = entered or "hermes"
     if provider not in ALL_PROVIDERS:
         raise ConfigError("unknown llm provider")
 
@@ -147,9 +157,13 @@ def init_config(
         section.setdefault(key, value)
 
     if interactive and provider in SUPPORTED_PROVIDERS:
-        secret = getpass_fn(f"{provider} API key (blank to skip): ").strip()
+        if _HAVE_QUESTIONARY:
+            secret = questionary.password(f"{provider} API key (blank to skip)").ask() or ""
+        else:
+            secret = getpass_fn(f"{provider} API key (blank to skip): ").strip()
         if secret:
             section["api_key"] = secret
+        secret = None
 
     _atomic_write_json(path, data)
     output(f"wrote runtime config for provider={provider} -> {path}")
@@ -348,14 +362,19 @@ def _cmd_start(args, *, out, err) -> int:
             provider = available[0]
             print(f"auto-detected: {detected[provider]}", file=out)
         else:
-            print("detected providers:", file=out)
-            for i, k in enumerate(available, 1):
-                print(f"  [{i}] {detected[k]}", file=out)
-            raw = input(f"select provider [1]: ").strip()
-            idx = int(raw) - 1 if raw.isdigit() else 0
-            if idx < 0 or idx >= len(available):
-                idx = 0
-            provider = available[idx]
+            if sys.__stdin__.isatty() and _HAVE_QUESTIONARY:
+                choices = [questionary.Choice(title=v, value=k) for k, v in detected.items()]
+                choices = sorted(choices, key=lambda c: c.value)
+                provider = questionary.select("Select LLM provider", choices=choices).ask()
+            else:
+                print("detected providers:", file=out)
+                for i, k in enumerate(available, 1):
+                    print(f"  [{i}] {detected[k]}", file=out)
+                raw = input(f"select provider [1]: ").strip()
+                idx = int(raw) - 1 if raw.isdigit() else 0
+                if idx < 0 or idx >= len(available):
+                    idx = 0
+                provider = available[idx]
 
         # Auto-init before starting.
         if config_path is None:

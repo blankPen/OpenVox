@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-MAIN_PATH = Path(__file__).resolve().parents[1] / "main.py"
+MAIN_PATH = Path(__file__).resolve().parents[1] / "openvox_worker" / "main.py"
 MAIN_SRC = MAIN_PATH.read_text(encoding="utf-8")
 
 
@@ -32,7 +32,7 @@ def _load_main_module():
     for mod_name in list(sys.modules):
         if mod_name.startswith(("agent_persona", "agent_skills", "agent_extensions", "agent_memory")):
             del sys.modules[mod_name]
-    return __import__("main")
+    return __import__("openvox_worker.main")
 
 
 # ---------------------------------------------------------------------------

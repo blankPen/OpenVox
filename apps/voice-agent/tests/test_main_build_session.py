@@ -15,7 +15,7 @@ from unittest.mock import patch
 import pytest
 
 
-MAIN_PATH = Path(__file__).resolve().parents[1] / "main.py"
+MAIN_PATH = Path(__file__).resolve().parents[1] / "openvox_worker" / "main.py"
 
 
 def _make_fake_config() -> "Config":  # type: ignore[name-defined]  # noqa: F821
