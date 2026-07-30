@@ -69,6 +69,38 @@ def _default_run(argv, *, cwd=None, timeout=None, check=False):
     )
 
 
+def _find_listening_pid(port: int, *, run: ProcessRunner | None = None) -> Optional[int]:
+    """Find pid listening on TCP ``port`` via ``lsof``. Returns None on miss."""
+    runner = run or _default_run
+    try:
+        result = runner(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+            timeout=2.0,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    for line in (result.stdout or "").splitlines():
+        line = line.strip()
+        if line.isdigit():
+            return int(line)
+    return None
+
+
+def _is_agentd_pid(pid: int, *, run: ProcessRunner | None = None) -> bool:
+    """True iff pid's command line matches our agentd invocation."""
+    runner = run or _default_run
+    try:
+        result = runner(
+            ["ps", "-o", "command=", "-p", str(pid)],
+            timeout=2.0,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return False
+    return "apps/agentd/dist/index.js" in (result.stdout or "")
+
+
 def _default_http_get(url: str, headers: "dict | None", timeout: float) -> HttpResult:
     request = urllib.request.Request(url, headers=headers or {})
     try:
@@ -210,11 +242,24 @@ class AgentdRuntime:
     # ── start ──
 
     def start(self) -> OwnedProcess:
-        """Build (if needed) + spawn the agentd process and wait for /health."""
+        """Build (if needed) + spawn the agentd process and wait for /health.
+
+        Idempotent: if an agentd is already healthy on the configured port,
+        the existing process is adopted (state file refreshed) instead of
+        spawning a new one. This makes ``openvox start`` safe to call
+        repeatedly without ``EADDRINUSE`` crashes.
+        """
         self.ensure_config()
         self._ensure_built()
         self._ensure_node()
         self._runtime_dir.mkdir(parents=True, exist_ok=True)
+
+        # Reuse an already-running agentd instead of failing on EADDRINUSE.
+        if self._wait_until_ready():
+            adopted = self._adopt_existing()
+            if adopted is not None:
+                return adopted
+
         owned = self._supervisor.start(
             "agentd",
             [
@@ -234,6 +279,42 @@ class AgentdRuntime:
                 f"agentd failed health probe at {self._health_url()} "
                 f"after {self._poll_attempts} attempts"
             )
+        return owned
+
+    def _adopt_existing(self) -> Optional[OwnedProcess]:
+        """Wrap the pid currently listening on the configured port.
+
+        Returns ``None`` if the health probe passed but no agentd
+        process is actually bound to the port — that means something
+        else is squatting, so the caller should fall through to a fresh
+        spawn (which will fail loudly).
+        """
+        port = int(self._cfg.get("agentd.port", 8787))
+        pid = _find_listening_pid(port, run=self._run)
+        if pid is None or not _is_agentd_pid(pid, run=self._run):
+            return None
+        command = [
+            "node",
+            str(self.dist_path),
+            "--config",
+            str(self.config_path),
+        ]
+        owned = OwnedProcess(
+            name="agentd",
+            pid=pid,
+            command=tuple(command),
+            log_path=self.log_path,
+        )
+        _atomic_write_json(
+            self.state_path,
+            {
+                "name": owned.name,
+                "pid": owned.pid,
+                "command": list(owned.command),
+                "log_path": str(owned.log_path),
+                "owned": True,
+            },
+        )
         return owned
 
     def _ensure_node(self) -> None:
@@ -298,6 +379,29 @@ class AgentdRuntime:
             self._sleep(0.25)
         return False
 
+    def loaded_providers(self) -> list[str]:
+        """Return the model IDs currently advertised by agentd (``/v1/models``).
+
+        Returns ``[]`` on any probe failure — callers treat this as a
+        degraded read (agentd may be down or the response shape changed),
+        not an exception worth surfacing to ``openvox status``.
+        """
+        try:
+            result = self._http_get(self._models_url(), self._auth_headers(), 3.0)
+        except (urllib.error.URLError, OSError):
+            return []
+        if result is None or result.status != 200:
+            return []
+        try:
+            data = json.loads(result.body)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return []
+        return [
+            item.get("id", "")
+            for item in (data.get("data") or [])
+            if item.get("id")
+        ]
+
     # ── stop ──
 
     def stop(self) -> None:
@@ -320,28 +424,33 @@ class AgentdRuntime:
     # ── status ──
 
     def status(self) -> dict:
-        """Return a status snapshot without re-probing the HTTP endpoint."""
+        """Return a status snapshot. Falls back to port discovery if state is stale."""
         path = self.state_path
+        base = {
+            "log_path": str(self.log_path),
+            "config_path": str(self.config_path),
+        }
         if not path.exists():
-            return {
-                "running": False,
-                "pid": None,
-                "log_path": str(self.log_path),
-                "config_path": str(self.config_path),
-            }
+            return {"running": False, "pid": None, **base}
         try:
             payload = json.loads(path.read_text())
         except (json.JSONDecodeError, OSError):
-            return {"running": False, "pid": None}
-        pid = int(payload.get("pid", 0))
-        command = payload.get("command", [])
-        # Use supervisor's ownership probe to confirm it's still us.
-        fragment = command[-1] if command else "agentd"
-        owned = self._supervisor.is_owned(pid, fragment)
-        return {
-            "running": owned,
-            "pid": pid if owned else None,
-            "command": command,
-            "log_path": payload.get("log_path", str(self.log_path)),
-            "config_path": str(self.config_path),
-        }
+            payload = None
+        command: list = []
+        if payload is not None:
+            pid = int(payload.get("pid", 0))
+            command = payload.get("command", [])
+            fragment = command[-1] if command else "agentd"
+            if self._supervisor.is_owned(pid, fragment):
+                return {
+                    "running": True,
+                    "pid": pid,
+                    "command": command,
+                    **base,
+                }
+        # State-file-pid is gone — probe the port to recover the real agentd.
+        port = int(self._cfg.get("agentd.port", 8787))
+        discovered = _find_listening_pid(port, run=self._run)
+        if discovered is not None and _is_agentd_pid(discovered, run=self._run):
+            return {"running": True, "pid": discovered, "command": command, **base}
+        return {"running": False, "pid": None, **base}

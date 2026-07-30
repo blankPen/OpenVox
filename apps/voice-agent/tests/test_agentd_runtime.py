@@ -145,8 +145,9 @@ def test_start_uses_dist_index_with_config_flag(tmp_path):
     assert command[1].endswith("apps/agentd/dist/index.js")
     assert command[2] == "--config"
     assert command[3].endswith("agentd.json")
-    # dist present → no pnpm build/install invoked
-    assert commands == []
+    # dist present -> no pnpm build/install invoked. (lsof/ps discovery calls
+    # for the idempotent reuse-existing probe are recorded; that's fine.)
+    assert not any("pnpm" in " ".join(c) for c in commands)
 
 
 def test_start_builds_when_dist_missing(tmp_path):
@@ -163,9 +164,11 @@ def test_start_builds_when_dist_missing(tmp_path):
     )
     runtime.start()
     joined = [" ".join(c) for c in commands]
+    # Filter out lsof/ps discovery calls (idempotent start probes the port).
+    pnpm_only = [j for j in joined if "pnpm" in j]
     assert any("install" in j and "--frozen-lockfile" in j for j in joined)
     assert any("build" in j for j in joined)
-    assert all("apps/agentd" in j for j in joined)
+    assert all("apps/agentd" in j for j in pnpm_only)
 
 
 def test_start_raises_when_node_missing(tmp_path):

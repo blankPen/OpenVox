@@ -156,6 +156,33 @@ def _load_config(config_arg: str | None) -> Config:
 # ───────── init ─────────
 
 
+def _prompt(
+    label: str,
+    current: str,
+    *,
+    password: bool = False,
+    input_fn: Callable[[str], str] = input,
+) -> str:
+    """Single interactive prompt that masks secrets when questionary is available.
+
+    Returns the user's value (or the current value if the prompt was
+    skipped / cancelled). Plain ``input()`` fallback echoes password
+    values — there's no portable way to hide stdin without a tty.
+    """
+    if _HAVE_QUESTIONARY:
+        ask = questionary.password if password else questionary.text
+        default = "" if password else current
+        val = ask(label, default=default).ask()
+        if val is None:
+            return current
+        val = val.strip()
+        return val or current
+    raw = input_fn(
+        f"{label} [{'*' * len(current) if password else current}]: "
+    ).strip()
+    return raw or current
+
+
 def init_config(
     path: Path,
     *,
@@ -226,18 +253,60 @@ def init_config(
     for key, value in PROVIDER_DEFAULTS.get(backend, {}).items():
         section.setdefault(key, value)
 
-    # Seed LiveKit connection defaults if not already present.
+    # Seed LiveKit connection defaults; prompt in interactive mode.
     livekit_sec = data.setdefault("livekit", {})
-    for lk_key, lk_default in (
-        ("url", "ws://localhost:7880"),
-        ("api_key", "devkey"),
-        ("api_secret", "secret"),
-        ("agent_name", "openz"),
-    ):
-        livekit_sec.setdefault(lk_key, lk_default)
+    livekit_sec.setdefault("agent_name", "openz")  # internal, not prompted
+    if interactive:
+        for lk_key, lk_label, lk_default in (
+            ("url", "LiveKit server URL", "wss://livekit.openz.top"),
+            ("api_key", "LiveKit API key", "devkey"),
+            ("api_secret", "LiveKit API secret", "secret"),
+        ):
+            current = livekit_sec.get(lk_key, lk_default)
+            val = _prompt(
+                lk_label, current,
+                password=(lk_key == "api_secret"),
+                input_fn=input_fn,
+            )
+            if val is not None:
+                livekit_sec[lk_key] = val
+    else:
+        for lk_key, lk_default in (
+            ("url", "wss://livekit.openz.top"),
+            ("api_key", "devkey"),
+            ("api_secret", "secret"),
+        ):
+            livekit_sec.setdefault(lk_key, lk_default)
+
+    # Volcengine STT/TTS credentials. The worker cannot run without these.
+    volc_sec = data.setdefault("volcengine", {})
+    if interactive:
+        for kind in ("stt", "tts"):
+            kind_sec = volc_sec.setdefault(kind, {})
+            for vkey, vlabel in (
+                ("app_id", f"Volcengine {kind.upper()} app_id"),
+                ("access_token", f"Volcengine {kind.upper()} access_token"),
+            ):
+                current = kind_sec.get(vkey, "")
+                val = _prompt(
+                    vlabel, current,
+                    password=(vkey == "access_token"),
+                    input_fn=input_fn,
+                )
+                # Always write the key (even when empty) so downstream code
+                # can rely on the section existing in the config file.
+                kind_sec[vkey] = val
+    # Non-interactive init never seeds dummy Volcengine credentials — the
+    # caller is expected to migrate from .env or set them later.
 
     _atomic_write_json(path, data)
     output(f"wrote runtime config for provider={provider} -> {path}")
+    if interactive:
+        output("")
+        output("next steps:")
+        output(f"  1. review:  cat {path}")
+        output("  2. verify:  openvox doctor")
+        output("  3. launch:  openvox start")
     return Config(data)
 
 
@@ -305,9 +374,16 @@ class _WorkerLauncher:
     inject a fake with the same ``start()`` surface.
     """
 
-    def __init__(self, *, config_path: Path | None, livekit_env: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        config_path: Path | None,
+        livekit_env: dict[str, str] | None = None,
+        worker_log_path: Path | None = None,
+    ) -> None:
         self._config_path = config_path
         self._livekit_env = livekit_env or {}
+        self._worker_log_path = worker_log_path
 
     def start(self) -> None:
         env = dict(os.environ)
@@ -315,10 +391,30 @@ class _WorkerLauncher:
             env["OPENVOX_CONFIG"] = str(self._config_path)
         # Inject LiveKit connection settings from config (overrides env).
         env.update(self._livekit_env)
-        result = subprocess.run(
-            [sys.executable, "-m", "openvox_worker.main", "start"],
-            env=env,
-        )
+        argv = [sys.executable, "-m", "openvox_worker.main", "start"]
+        if self._worker_log_path is None:
+            result = subprocess.run(argv, env=env)
+        else:
+            self._worker_log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_file = self._worker_log_path.open("ab")
+            try:
+                proc = subprocess.Popen(
+                    argv,
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                )
+                assert proc.stdout is not None
+                with proc.stdout:
+                    for chunk in iter(proc.stdout.readline, b""):
+                        sys.stdout.buffer.write(chunk)
+                        sys.stdout.buffer.flush()
+                        log_file.write(chunk)
+                    log_file.flush()
+                rc = proc.wait()
+                result = subprocess.CompletedProcess(argv, rc)
+            finally:
+                log_file.close()
         if result.returncode != 0:
             raise RuntimeError(f"livekit worker exited with code {result.returncode}")
 
@@ -329,6 +425,79 @@ class _WorkerLauncher:
 def _resolve_backend(provider: str) -> str:
     """Map a user-facing provider name to a runtime backend type."""
     return PROVIDER_ALIASES.get(provider, provider)
+
+
+def _probe_llm_connectivity(settings: Any, *, timeout: float = 10.0) -> tuple[bool, str]:
+    """Send a minimal /v1/chat/completions request to verify the LLM is reachable.
+
+    Returns ``(ok, detail)``. ``detail`` is human-friendly status, used by
+    the start summary; it never includes the request body or token.
+    """
+    import urllib.error
+    import urllib.request
+    headers = {"Content-Type": "application/json"}
+    if settings.api_key:
+        headers["Authorization"] = f"Bearer {settings.api_key}"
+    body = json.dumps(
+        {
+            "model": settings.model,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 1,
+        }
+    ).encode("utf-8")
+    url = f"{settings.api_base.rstrip('/')}/chat/completions"
+    try:
+        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if 200 <= resp.status < 300:
+                return True, f"200 OK ({settings.model})"
+            return False, f"HTTP {resp.status}"
+    except urllib.error.HTTPError as exc:
+        return False, f"HTTP {exc.code}"
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        return False, f"{type(exc).__name__}"
+
+
+def _print_start_summary(cfg: Config, *, backend: str, hermes: Any, agentd: Any) -> None:
+    """Print a one-shot 'backend ready' summary before the worker takes over."""
+    from .llm_provider import resolve_llm_settings
+    print("", flush=True)
+    if backend == "agentd":
+        state = agentd.status()
+        loaded = agentd.loaded_providers() if hasattr(agentd, "loaded_providers") else []
+        tools = ",".join(_short_tool(t) for t in loaded) or "-"
+        pid = state.get("pid") or "-"
+        print(f"  ✓ backend ready (agentd)   pid={pid}   loaded=[{tools}]", flush=True)
+    else:
+        readiness = hermes.inspect()
+        status = "ready" if readiness.ready else "not ready"
+        print(
+            f"  ✓ backend ready (hermes)   status={status}   health={readiness.health_url}",
+            flush=True,
+        )
+    lk_url = cfg.get("livekit.url", "")
+    agent_name = cfg.get("livekit.agent_name", "")
+    print(f"  ✓ livekit                 url={lk_url}   agent_name={agent_name}", flush=True)
+    runtime_log = _runtime_dir() / "worker.log"
+    print(f"  ✓ logs                    tail -f {runtime_log}", flush=True)
+    # Print resolved LLM target so the user can confirm what's wired.
+    try:
+        settings = resolve_llm_settings(cfg)
+        # Connectivity probe — small /v1/chat/completions round-trip.
+        ok, detail = _probe_llm_connectivity(settings)
+        if ok:
+            print(
+                f"  ✓ llm probe               {detail}   via {settings.api_base}",
+                flush=True,
+            )
+        else:
+            print(
+                f"  ✗ llm probe               failed ({detail}) — worker will retry",
+                flush=True,
+            )
+    except Exception:  # noqa: BLE001 — summary is best-effort
+        pass
+    print("", flush=True)
 
 
 def orchestrate_start(
@@ -366,6 +535,7 @@ def orchestrate_start(
         else:  # agentd (for claude, codex, openclaw)
             agentd.start()
             owned.append(agentd)
+        _print_start_summary(cfg, backend=backend, hermes=hermes, agentd=agentd)
         worker.start()
     except BaseException:
         for rt in reversed(owned):
@@ -384,23 +554,130 @@ def orchestrate_stop(*, hermes: Any, agentd: Any) -> int:
 
 
 def collect_status(cfg: Config, *, hermes: Any, agentd: Any) -> dict:
-    """Assemble a secret-free status payload for all known providers."""
-    readiness = hermes.inspect()
-    agentd_state = agentd.status()
+    """Assemble a structured, secret-free status payload.
+
+    Returns ``{selected, livekit, backend, tools}``. ``selected.tool`` is
+    the user-facing tool name derived from ``llm.provider`` and
+    ``agentd.model`` (e.g. ``agentd/claude`` -> ``claude``). ``backend``
+    is the runtime state of whatever backend is currently selected —
+    Hermes health probe for the Hermes backend, agentd process + loaded
+    models for the agentd bridge. ``tools`` is the catalogue of other
+    user-facing tools, filtered so the active one is not repeated.
+    """
+    selected_backend = cfg.get("llm.provider", "hermes")
+    user_tool = _user_facing_tool(cfg)
+    livekit = {
+        "url": str(cfg.get("livekit.url", "")),
+        "agent_name": str(cfg.get("livekit.agent_name", "")),
+    }
+
+    backend: dict = {}
+    if selected_backend == "hermes":
+        readiness = hermes.inspect()
+        backend = {
+            "kind": "hermes",
+            "ready": readiness.ready,
+            "status": "ready" if readiness.ready else "not ready",
+            "url": readiness.health_url,
+            "detail": readiness.detail,
+        }
+    elif selected_backend == "agentd":
+        agentd_state = agentd.status()
+        loaded = agentd.loaded_providers() or []
+        backend = {
+            "kind": "agentd",
+            "running": bool(agentd_state.get("running")),
+            "pid": agentd_state.get("pid"),
+            "status": "running" if agentd_state.get("running") else "stopped",
+            "loaded": loaded,
+        }
+
     detected = _detect_providers()
-    providers = {
-        name: {"status": info["status"]}
-        for name, info in detected.items()
-    }
-    providers["hermes"]["detail"] = readiness.detail
-    providers["agentd"] = {
-        "status": "running" if agentd_state.get("running") else "stopped",
-        "pid": agentd_state.get("pid"),
-    }
+    tools: dict = {}
+    agentd_running = bool(backend.get("running")) if selected_backend == "agentd" else False
+    for name in ("hermes", "claude", "codex", "openclaw"):
+        if selected_backend == "hermes" and name == "hermes":
+            continue  # already covered by backend block
+        if selected_backend == "agentd" and name in ("claude", "codex"):
+            tools[name] = {
+                "status": "served via agentd" if agentd_running else "agentd not running",
+                "label": detected[name]["label"],
+            }
+            continue
+        tools[name] = {
+            "status": detected[name]["status"],
+            "label": detected[name]["label"],
+        }
+    if selected_backend != "hermes":
+        readiness = hermes.inspect()
+        tools["hermes"]["ready"] = readiness.ready
+        tools["hermes"]["url"] = readiness.health_url
+
     return {
-        "selected": cfg.get("llm.provider", "hermes"),
-        "providers": providers,
+        "selected": {"backend": selected_backend, "tool": user_tool},
+        "livekit": livekit,
+        "backend": backend,
+        "tools": tools,
     }
+
+
+def _user_facing_tool(cfg: Config) -> str:
+    """Resolve the user-facing tool name from the selected provider config.
+
+    ``llm.provider=hermes`` -> ``hermes``.
+    ``llm.provider=agentd`` + ``agentd.model=agentd/claude`` -> ``claude``.
+    The ``agentd/`` prefix on the model is the canonical way to declare
+    which underlying tool the bridge is serving.
+    """
+    provider = cfg.get("llm.provider", "hermes")
+    if provider == "hermes":
+        return "hermes"
+    if provider == "agentd":
+        model = str(cfg.get("agentd.model", "agentd/claude"))
+        if "/" in model:
+            return model.split("/")[-1]
+        return model
+    return provider
+
+
+def _short_tool(model_id: str) -> str:
+    """Strip the ``agentd/`` prefix: ``agentd/claude`` -> ``claude``."""
+    return model_id.split("/")[-1] if "/" in model_id else model_id
+
+
+def _format_status_text(payload: dict) -> str:
+    """Render the status payload as a human-readable multi-line string."""
+    lines: list[str] = []
+    sel = payload["selected"]
+    if sel["tool"] != sel["backend"]:
+        lines.append(f"selected:    {sel['backend']} -> {sel['tool']}")
+    else:
+        lines.append(f"selected:    {sel['backend']}")
+    lk = payload["livekit"]
+    lines.append(f"livekit:     {lk['url']} (agent={lk['agent_name']})")
+
+    be = payload["backend"]
+    if be.get("kind") == "hermes":
+        lines.append(f"backend:     hermes [{be['status']}]   url={be['url']}")
+    elif be.get("kind") == "agentd":
+        tools_str = ",".join(_short_tool(t) for t in be.get("loaded", [])) or "-"
+        pid = be.get("pid") or "-"
+        lines.append(
+            f"backend:     agentd [{be['status']}]   pid={pid}   loaded=[{tools_str}]"
+        )
+
+    if payload["tools"]:
+        lines.append("")
+        lines.append("other tools:")
+        for name in ("hermes", "claude", "codex", "openclaw"):
+            info = payload["tools"].get(name)
+            if info is None:
+                continue
+            extra = ""
+            if name == "hermes" and "url" in info:
+                extra = f"   {info['url']}"
+            lines.append(f"  {name:10} {info['status']}{extra}")
+    return "\n".join(lines)
 
 
 # ───────── Command handlers ─────────
@@ -466,7 +743,11 @@ def _cmd_start(args, *, out, err) -> int:
             cfg,
             hermes=_build_hermes(cfg),
             agentd=_build_agentd(cfg),
-            worker=_WorkerLauncher(config_path=config_path, livekit_env=livekit_env),
+            worker=_WorkerLauncher(
+                config_path=config_path,
+                livekit_env=livekit_env,
+                worker_log_path=_runtime_dir() / "worker.log",
+            ),
             auto_start=True,
         )
     except PlannedProviderError as exc:
@@ -512,9 +793,7 @@ def _cmd_status(args, *, out, err) -> int:
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True), file=out)
     else:
-        print(f"selected provider: {payload['selected']}", file=out)
-        for name, info in payload["providers"].items():
-            print(f"  {name:10} {info['status']}", file=out)
+        print(_format_status_text(payload), file=out)
     return 0
 
 
@@ -531,6 +810,163 @@ def _cmd_doctor_hermes(args, *, out, err) -> int:
     print(f"health_url:  {readiness.health_url}", file=out)
     print(f"detail:      {readiness.detail}", file=out)
     return 0 if readiness.ready else 1
+
+
+def _probe_url(url: str, *, timeout: float = 3.0) -> bool:
+    """Return True if ``url`` responds (any HTTP status, not connection-refused)."""
+    import urllib.error
+    import urllib.request
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return True
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError, ValueError):
+        return False
+
+
+def _run_doctor_checks(cfg: Config) -> list[tuple[str, bool, str]]:
+    """Return list of (name, ok, detail) checks for the configured stack."""
+    checks: list[tuple[str, bool, str]] = []
+
+    # ── LiveKit connection ──
+    lk_url = str(cfg.get("livekit.url", ""))
+    if not lk_url:
+        checks.append(("LiveKit URL", False, "missing — run 'openvox init' to set"))
+    elif not (lk_url.startswith("ws://") or lk_url.startswith("wss://")):
+        checks.append(("LiveKit URL", False, f"invalid scheme: {lk_url}"))
+    else:
+        # Probe the corresponding HTTP(S) endpoint; LiveKit serves an
+        # HTTP API on the same host so this catches DNS / port issues.
+        from urllib.parse import urlparse
+        parsed = urlparse(lk_url)
+        scheme = "https" if parsed.scheme == "wss" else "http"
+        probe_url = f"{scheme}://{parsed.hostname}:{parsed.port or (443 if parsed.scheme == 'wss' else 80)}/"
+        reachable = _probe_url(probe_url)
+        checks.append((
+            "LiveKit URL",
+            reachable,
+            lk_url if reachable else f"{lk_url} (unreachable)",
+        ))
+
+    if cfg.get("livekit.api_key") and cfg.get("livekit.api_secret"):
+        checks.append(("LiveKit credentials", True, "configured"))
+    else:
+        checks.append((
+            "LiveKit credentials",
+            False,
+            "set livekit.api_key + livekit.api_secret in config",
+        ))
+
+    # ── Volcengine STT / TTS ──
+    for kind in ("stt", "tts"):
+        app_id = cfg.get(f"volcengine.{kind}.app_id")
+        token = cfg.get(f"volcengine.{kind}.access_token")
+        if app_id and token:
+            checks.append((f"Volcengine {kind.upper()}", True, "configured"))
+        else:
+            checks.append((
+                f"Volcengine {kind.upper()}",
+                False,
+                f"set volcengine.{kind}.app_id + access_token",
+            ))
+
+    # ── Backend (selected provider) ──
+    provider = cfg.get("llm.provider", "hermes")
+    if provider == "agentd":
+        agentd_rt = _build_agentd(cfg)
+        agentd_state = agentd_rt.status()
+        if agentd_state.get("running"):
+            loaded = agentd_rt.loaded_providers()
+            tools = ",".join(_short_tool(t) for t in loaded) or "-"
+            checks.append((
+                "agentd backend",
+                True,
+                f"pid={agentd_state.get('pid')}   loaded=[{tools}]",
+            ))
+        else:
+            checks.append((
+                "agentd backend",
+                False,
+                "stopped — run 'openvox start' to bring it up",
+            ))
+    elif provider == "hermes":
+        readiness = _build_hermes(cfg).inspect()
+        checks.append((
+            "Hermes gateway",
+            readiness.ready,
+            readiness.detail if readiness.ready else f"{readiness.detail} — start with 'hermes gateway start'",
+        ))
+
+    # ── Tool installations ──
+    detected = _detect_providers()
+    for name in ("hermes", "claude"):
+        info = detected[name]
+        checks.append((
+            f"{name} CLI",
+            info["status"] == "installed",
+            info["label"],
+        ))
+
+    return checks
+
+
+def _cmd_doctor_all(args, *, out, err) -> int:
+    """Run every diagnostic check and print a single report."""
+    try:
+        cfg = _load_config(args.config)
+    except ConfigError as exc:
+        print(f"error: {exc}", file=err)
+        return 2
+
+    checks = _run_doctor_checks(cfg)
+    failed = 0
+    for name, ok, detail in checks:
+        icon = "✓" if ok else "✗"
+        print(f"  {icon} {name:24} {detail}", file=out)
+        if not ok:
+            failed += 1
+
+    print(file=out)
+    if failed:
+        print(
+            f"{failed} check(s) need attention. Run 'openvox init' to fill missing config.",
+            file=out,
+        )
+        return 1
+    print("all checks passed.", file=out)
+    return 0
+
+
+def _cmd_doctor(args, *, out, err) -> int:
+    """Dispatch on ``args.target``: ``hermes`` -> focused, otherwise all checks."""
+    target = getattr(args, "target", "all") or "all"
+    if target == "hermes":
+        return _cmd_doctor_hermes(args, out=out, err=err)
+    return _cmd_doctor_all(args, out=out, err=err)
+
+
+def _cmd_log(args, *, out, err) -> int:
+    """Tail runtime logs (``agentd`` / ``worker``) with ``-f`` to follow."""
+    target = args.target
+    log_path = _runtime_dir() / f"{target}.log"
+    if not log_path.exists():
+        print(f"error: log file not found: {log_path}", file=err)
+        print(f"hint: run 'openvox start' first to populate {target}.log", file=err)
+        return 1
+    # Delegate to `tail` so the user gets real OS-level follow/buffering
+    # semantics. macOS / Linux both ship tail; on Windows we'd need a
+    # pure-Python fallback, but the voice-agent runtime is POSIX-first.
+    cmd = ["tail"]
+    if args.follow:
+        cmd.append("-f")
+    else:
+        cmd += ["-n", str(max(1, args.lines))]
+    cmd.append(str(log_path))
+    try:
+        result = subprocess.run(cmd)
+    except FileNotFoundError:
+        print("error: 'tail' executable not found in PATH", file=err)
+        return 1
+    return result.returncode
 
 
 def _cmd_hermes_setup(args, *, out, err) -> int:
@@ -621,17 +1057,41 @@ def build_parser() -> argparse.ArgumentParser:
     status_p.add_argument("--json", action="store_true", help="emit JSON")
     status_p.set_defaults(handler=_cmd_status)
 
+    log_p = sub.add_parser(
+        "log", help="tail runtime logs",
+        formatter_class=RawDescriptionRichHelpFormatter,
+    )
+    _add_config(log_p)  # accept (and ignore) --config for consistency
+    log_p.add_argument(
+        "target",
+        nargs="?",
+        default="agentd",
+        choices=["agentd", "worker"],
+        help="which log to show (default: agentd)",
+    )
+    log_p.add_argument(
+        "-n", "--lines", type=int, default=50,
+        help="lines to show without --follow (default: 50)",
+    )
+    log_p.add_argument(
+        "-f", "--follow", action="store_true",
+        help="follow log output (like tail -f)",
+    )
+    log_p.set_defaults(handler=_cmd_log)
+
     doctor_p = sub.add_parser(
         "doctor", help="diagnostics",
         formatter_class=RawDescriptionRichHelpFormatter,
     )
-    doctor_sub = doctor_p.add_subparsers(dest="target", required=True)
-    doctor_hermes_p = doctor_sub.add_parser(
-        "hermes", help="inspect Hermes readiness",
-        formatter_class=RawDescriptionRichHelpFormatter,
+    doctor_p.add_argument(
+        "target",
+        nargs="?",
+        default="all",
+        choices=["all", "hermes"],
+        help="what to check (default: all checks)",
     )
-    _add_config(doctor_hermes_p)
-    doctor_hermes_p.set_defaults(handler=_cmd_doctor_hermes)
+    _add_config(doctor_p)
+    doctor_p.set_defaults(handler=_cmd_doctor)
 
     hermes_p = sub.add_parser(
         "hermes", help="Hermes management",

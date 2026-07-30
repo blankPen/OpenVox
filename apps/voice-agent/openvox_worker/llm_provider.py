@@ -41,5 +41,5 @@ def build_llm(cfg: Config, llm_constructor: Callable[..., Any]) -> Any:
     return llm_constructor(
         model=settings.model,
         base_url=settings.api_base,
-        api_key=settings.api_key,
+        api_key=settings.api_key or "sk-placeholder",
     )
