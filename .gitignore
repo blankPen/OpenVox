@@ -109,3 +109,8 @@ android/key.properties
 # - Podfile.lock      ← iOS 团队成员安装同一版本
 # - pubspec.lock      ← Flutter Dart 依赖锁定
 # - requirements.txt  ← Python 依赖锁定（如果有）
+
+# Python `python -m build` output (wheel + sdist). Built artifacts live here
+# when running `tooling/scripts/build-cli.sh openvox`. Keep dist/ ignored for
+# all apps; CI uploads the artifacts it produces.
+**/dist/
