@@ -382,7 +382,7 @@ def _cmd_start(args, *, out, err) -> int:
             hermes=_build_hermes(cfg),
             agentd=_build_agentd(cfg),
             worker=_WorkerLauncher(config_path=config_path),
-            auto_start=args.yes,
+            auto_start=True,
         )
     except PlannedProviderError as exc:
         print(f"error: {exc}", file=err)
@@ -394,7 +394,7 @@ def _cmd_start(args, *, out, err) -> int:
         print(f"error: {exc}", file=err)
         print(
             "hint: start the gateway with 'hermes gateway start' and configure it "
-            "with 'openvox hermes setup --yes' (or re-run 'openvox start --yes')",
+            "with 'openvox hermes setup --yes'",
             file=err,
         )
         return 1
@@ -489,7 +489,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     start_p = sub.add_parser("start", help="start backend + LiveKit worker")
     _add_config(start_p)
-    start_p.add_argument("--yes", action="store_true", help="auto-start backends")
     start_p.add_argument(
         "--provider", "--llm",
         choices=["hermes", "agentd", "claude", "codex", "openclaw"],
