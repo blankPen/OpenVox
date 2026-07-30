@@ -8,6 +8,7 @@ dependencies = [
     "livekit-plugins-volcengine",
     "livekit-plugins-openai==1.6.4",
     "questionary",
+    "rich-argparse",
 ]
 
 [project.scripts]

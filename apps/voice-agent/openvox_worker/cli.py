@@ -26,6 +26,8 @@ fakes without touching Node, Hermes, or the network.
 from __future__ import annotations
 
 import argparse
+
+from rich_argparse import RawDescriptionRichHelpFormatter
 import getpass
 import json
 import os
@@ -546,20 +548,44 @@ def _cmd_hermes_setup(args, *, out, err) -> int:
 
 # ───────── Parser ─────────
 
+#: Short help description; the full module docstring is too verbose for ``-h``.
+_HELP_DESCRIPTION = "OpenVox voice-agent runtime CLI."
+
+_HELP_EPILOG = """examples:
+  openvox init                 pick LLM backend interactively
+  openvox start                bring up backend + LiveKit worker
+  openvox status               show provider readiness
+
+exit codes:
+  0  success
+  1  runtime error (backend failed to start)
+  2  user error (bad config / unready provider / invalid args)
+"""
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="openvox", description=__doc__)
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser = argparse.ArgumentParser(
+        prog="openvox",
+        description=_HELP_DESCRIPTION,
+        epilog=_HELP_EPILOG,
+        formatter_class=RawDescriptionRichHelpFormatter,
+    )
+    sub = parser.add_subparsers(dest="command", required=True, title="commands")
 
     def _add_config(p: argparse.ArgumentParser) -> None:
         p.add_argument("--config", default=None, help="path to config.json")
 
-    init_p = sub.add_parser("init", help="write/update config and pick provider")
+    init_p = sub.add_parser(
+        "init", help="write/update config and pick provider",
+        formatter_class=RawDescriptionRichHelpFormatter,
+    )
     _add_config(init_p)
     init_p.add_argument("--provider", choices=list(ALL_PROVIDERS), default=None)
     init_p.set_defaults(handler=_cmd_init)
 
-    start_p = sub.add_parser("start", help="start backend + LiveKit worker")
+    start_p = sub.add_parser(
+        "start", help="start backend + LiveKit worker",
+        formatter_class=RawDescriptionRichHelpFormatter,
+    )
     _add_config(start_p)
     start_p.add_argument(
         "--provider", "--llm",
@@ -569,30 +595,47 @@ def build_parser() -> argparse.ArgumentParser:
     )
     start_p.set_defaults(handler=_cmd_start)
 
-    stop_p = sub.add_parser("stop", help="stop supervised agentd")
+    stop_p = sub.add_parser(
+        "stop", help="stop supervised agentd",
+        formatter_class=RawDescriptionRichHelpFormatter,
+    )
     _add_config(stop_p)
     stop_p.set_defaults(handler=_cmd_stop)
 
-    status_p = sub.add_parser("status", help="report provider status")
+    status_p = sub.add_parser(
+        "status", help="report provider status",
+        formatter_class=RawDescriptionRichHelpFormatter,
+    )
     _add_config(status_p)
     status_p.add_argument("--json", action="store_true", help="emit JSON")
     status_p.set_defaults(handler=_cmd_status)
 
-    doctor_p = sub.add_parser("doctor", help="diagnostics")
+    doctor_p = sub.add_parser(
+        "doctor", help="diagnostics",
+        formatter_class=RawDescriptionRichHelpFormatter,
+    )
     doctor_sub = doctor_p.add_subparsers(dest="target", required=True)
-    doctor_hermes_p = doctor_sub.add_parser("hermes", help="inspect Hermes readiness")
+    doctor_hermes_p = doctor_sub.add_parser(
+        "hermes", help="inspect Hermes readiness",
+        formatter_class=RawDescriptionRichHelpFormatter,
+    )
     _add_config(doctor_hermes_p)
     doctor_hermes_p.set_defaults(handler=_cmd_doctor_hermes)
 
-    hermes_p = sub.add_parser("hermes", help="Hermes management")
+    hermes_p = sub.add_parser(
+        "hermes", help="Hermes management",
+        formatter_class=RawDescriptionRichHelpFormatter,
+    )
     hermes_sub = hermes_p.add_subparsers(dest="target", required=True)
-    hermes_setup_p = hermes_sub.add_parser("setup", help="configure Hermes api-server")
+    hermes_setup_p = hermes_sub.add_parser(
+        "setup", help="configure Hermes api-server",
+        formatter_class=RawDescriptionRichHelpFormatter,
+    )
     _add_config(hermes_setup_p)
     hermes_setup_p.add_argument("--yes", action="store_true", help="apply changes")
     hermes_setup_p.set_defaults(handler=_cmd_hermes_setup)
 
     return parser
-
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
