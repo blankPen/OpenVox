@@ -1,3 +1,5 @@
+# shellcheck shell=bash
+
 # Version helpers — extract app versions from each app's manifest.
 #
 # . "$(dirname "$0")/lib/versions.sh"

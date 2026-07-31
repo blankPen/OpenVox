@@ -55,20 +55,33 @@ install_agentd() {
 
   rm -f "$pack_tgz"
   info "agentd $(node -e "console.log(require('$REPO_ROOT/apps/agentd/package.json').version)") installed"
-  command -v agentd >/dev/null && info "  → $(command -v agentd)" || warn "agentd not on PATH (you may need to relogin)"
+  if command -v agentd >/dev/null; then
+    info "  → $(command -v agentd)"
+  else
+    warn "agentd not on PATH (you may need to relogin)"
+  fi
 }
 
 install_openvox() {
   step "openvox (Python)"
-  local py pip_cmd install_args=()
-  if [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
+
+  # Pick the Python interpreter to install openvox against. Priority:
+  #   1. The interpreter driving the current shell (VIRTUAL_ENV).
+  #   2. The project-local .venv, so a plain `./install-cli.sh openvox`
+  #      still works for a freshly cloned repo.
+  #   3. A system python3 / python reachable on PATH.
+  #   4. Otherwise die with a hint to install / activate one.
+  local py=""
+  if [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
+    py="${VIRTUAL_ENV}/bin/python"
+  elif [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
     py="$REPO_ROOT/.venv/bin/python"
   elif have python3; then
     py="python3"
   elif have python; then
     py="python"
   else
-    die "python not found in PATH"
+    die "python not found (set \$PATH, create $REPO_ROOT/.venv, or activate a venv)"
   fi
 
   cd "$REPO_ROOT/apps/voice-agent"
@@ -80,7 +93,12 @@ install_openvox() {
     local -a pip_cmd=("$py" -m pip)
     local -a install_args=()
     # --user is meaningful only outside an active venv / system python.
-    local in_venv=$("$py" -c "import sys; print(int(sys.prefix != sys.base_prefix))")
+    # Declare-and-assign separately so a failing python invocation cannot
+    # silently leave in_venv empty and bypass the guard below.
+    local in_venv
+    if ! in_venv=$("$py" -c "import sys; print(int(sys.prefix != sys.base_prefix))" 2>/dev/null); then
+      die "python sanity check failed via: $py"
+    fi
     if [[ "$in_venv" -eq 0 ]] && "${pip_cmd[@]}" install --user --help >/dev/null 2>&1; then
       install_args=(--user)
     fi
@@ -88,12 +106,41 @@ install_openvox() {
   fi
 
   info "openvox installed via $py"
-  # The console script lives in the venv/Scripts/bin — print the resolved path.
-  if [[ -x "$REPO_ROOT/.venv/bin/openvox" ]]; then
-    info "  → $REPO_ROOT/.venv/bin/openvox"
-  else
-    "$py" -c "import shutil; print('  →', shutil.which('openvox') or '(not on PATH)')"
-  fi
+  # Resolve the installed console script. We try (in order): shutil.which on
+  # PATH (handles pipx / --user sites), then a few well-known locations
+  # inside the current interpreter's environment.
+  "$py" - <<'PYEOF' 2>/dev/null || info "  \u2192 (path resolution failed; run \`which openvox\`)"
+import os, shutil, sys
+from pathlib import Path
+candidates = []
+which = shutil.which("openvox")
+if which:
+    candidates.append(which)
+# pipx
+for p in (Path.home() / ".local" / "bin" / "openvox",):
+    if p.exists():
+        candidates.append(str(p))
+# active / project venv
+for env_var in ("VIRTUAL_ENV",):
+    base = os.environ.get(env_var)
+    if base:
+        for sub in ("bin/openvox", "Scripts/openvox.exe"):
+            p = Path(base) / sub
+            if p.exists():
+                candidates.append(str(p))
+# next to the interpreter we used to install
+interp_dir = Path(sys.executable).parent
+for name in ("openvox", "openvox.exe"):
+    p = interp_dir / name
+    if p.exists():
+        candidates.append(str(p))
+if candidates:
+    on_path = shutil.which("openvox") is not None
+    suffix = "" if on_path else " (not on PATH \u2014 rehash your shell)"
+    print(f"  \u2192 {candidates[0]}{suffix}")
+else:
+    print("  \u2192 openvox install succeeded but console script not found")
+PYEOF
 }
 
 if [[ "$DO_BUILD" -eq 1 ]]; then

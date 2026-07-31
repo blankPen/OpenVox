@@ -29,7 +29,7 @@ build_agentd() {
   cd "$REPO_ROOT/apps/agentd"
 
   if have pnpm; then
-    pnpm install --frozen-lockfile
+    CI=true pnpm install --frozen-lockfile
     pnpm build
   else
     npm ci
@@ -64,9 +64,10 @@ build_openvox() {
 
   shopt -s nullglob
   local wheels=(dist/*.whl)
+  local packages=(dist/*.whl dist/*.tar.gz)
   shopt -u nullglob
   [[ ${#wheels[@]} -gt 0 ]] || die "openvox build did not produce a wheel"
-  info "openvox $(app_version openvox) → $(ls dist/*.whl dist/*.tar.gz 2>/dev/null | tr '\n' ' ')"
+  info "openvox $(app_version openvox) → ${packages[*]}"
 }
 
 case "$TARGET" in

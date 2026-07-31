@@ -10,7 +10,7 @@ docker compose up -d
 
 # 等 livekit 健康
 echo "等待 LiveKit 就绪 ..."
-for i in {1..30}; do
+for _ in {1..30}; do
   if curl -sf http://localhost:7880 >/dev/null 2>&1; then
     echo "LiveKit up."
     break
@@ -21,6 +21,7 @@ done
 # 起 agent worker
 cd "$(dirname "$0")/../../apps/voice-agent"
 if [ -d .venv ]; then
+  # shellcheck disable=SC1091
   source .venv/bin/activate
 fi
 exec python main.py start

@@ -49,6 +49,10 @@ build_ios() {
   if ! have pod; then die "pod (CocoaPods) not found"; fi
 
   cd "$REPO_ROOT/apps/voice-client"
+  # This project still has CocoaPods-only plugins. Flutter 3.44's partial
+  # SwiftPM migration leaves Flutter.framework unlinked, so keep CocoaPods as
+  # the dependency manager until every plugin supports SwiftPM.
+  run_flutter config --no-enable-swift-package-manager
   run_flutter pub get
   # --simulator builds the iPhoneSimulator slice (no codesigning required);
   # --no-codesign produces the iphoneos slice without provisioning profiles.
