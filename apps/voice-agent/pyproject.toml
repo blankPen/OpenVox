@@ -4,8 +4,15 @@ version = "0.2.0"
 description = "OpenVox voice-agent runtime: Volcengine STT/TTS + selectable LLM backend (Hermes / agentd) via LiveKit Agents"
 requires-python = ">=3.10"
 dependencies = [
-    "livekit-agents[otel,silero,turn-detector]~=1.5",
-    "livekit-plugins-volcengine",
+    # LiveKit Agents runtime (>=1.6 split the otel / silero / turn-detector
+    # "extras" out into top-level packages, so we now declare them explicitly).
+    "livekit-agents~=1.6",
+    "livekit-plugins-silero~=1.6",
+    "livekit-plugins-turn-detector~=1.6",
+    "opentelemetry-api~=1.0",
+    "opentelemetry-sdk~=1.0",
+    "opentelemetry-exporter-otlp~=1.0",
+    "livekit-plugins-volcengine~=1.6",
     "livekit-plugins-openai==1.6.4",
     "questionary",
     "rich-argparse",
