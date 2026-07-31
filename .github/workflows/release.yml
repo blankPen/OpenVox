@@ -5,6 +5,8 @@ name: Release
 # GitHub Release, and prints install commands.
 #
 # Required secret for tag-triggered runs: GITHUB_TOKEN (auto-provided).
+# Optional Android signing secrets: ANDROID_KEYSTORE_BASE64,
+# ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD.
 # Optional inputs (workflow_dispatch): tag (defaults to the latest v* tag).
 
 on:
@@ -70,10 +72,12 @@ jobs:
           fi
 
           commit="$(git rev-parse --short HEAD)"
-          echo "tag=${tag}"            >> "$GITHUB_OUTPUT"
-          echo "version=${version}"    >> "$GITHUB_OUTPUT"
-          echo "is_prerelease=${is_prerelease}" >> "$GITHUB_OUTPUT"
-          echo "commit=${commit}"      >> "$GITHUB_OUTPUT"
+          {
+            echo "tag=${tag}"
+            echo "version=${version}"
+            echo "is_prerelease=${is_prerelease}"
+            echo "commit=${commit}"
+          } >> "$GITHUB_OUTPUT"
           echo "release: tag=${tag} version=${version} prerelease=${is_prerelease}"
 
   # ── agentd: Node CLI, .tgz package ──────────────────────────────
@@ -187,7 +191,7 @@ jobs:
           flutter-version: "3.44.6"
 
       - name: Cache pub dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
         with:
           path: |
             ~/.pub-cache
@@ -204,11 +208,35 @@ jobs:
         working-directory: apps/voice-client
         run: flutter analyze --no-fatal-warnings --no-fatal-infos
 
+      - name: Configure Android release signing
+        id: android-signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$ANDROID_KEYSTORE_BASE64" || -z "$ANDROID_KEYSTORE_PASSWORD" || -z "$ANDROID_KEY_ALIAS" || -z "$ANDROID_KEY_PASSWORD" ]]; then
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "Android signing secrets are incomplete; publishing the release APK as debug-signed."
+            exit 0
+          fi
+
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/upload-keystore.jks
+          {
+            printf 'storePassword=%s\n' "$ANDROID_KEYSTORE_PASSWORD"
+            printf 'keyPassword=%s\n' "$ANDROID_KEY_PASSWORD"
+            printf 'keyAlias=%s\n' "$ANDROID_KEY_ALIAS"
+            printf 'storeFile=%s\n' 'upload-keystore.jks'
+          } > android/key.properties
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
       - name: Build debug APK
         working-directory: apps/voice-client
         run: flutter build apk --debug
 
-      - name: Build release APK (unsigned)
+      - name: Build release APK
         working-directory: apps/voice-client
         run: flutter build apk --release
         env:
@@ -217,12 +245,23 @@ jobs:
           FLUTTER_SUPPRESS_ANALYTICS: "true"
 
       - name: Stage APK artifacts
+        env:
+          APK_SIGNED: ${{ steps.android-signing.outputs.signed }}
         working-directory: apps/voice-client
         run: |
           set -euo pipefail
           mkdir -p ../../artifacts
           cp build/app/outputs/flutter-apk/app-debug.apk   "../../artifacts/voice-client-${{ needs.meta.outputs.version }}-android-debug.apk"
-          cp build/app/outputs/flutter-apk/app-release.apk "../../artifacts/voice-client-${{ needs.meta.outputs.version }}-android-release-unsigned.apk"
+          if [[ "$APK_SIGNED" == "true" ]]; then
+            cp build/app/outputs/flutter-apk/app-release.apk "../../artifacts/voice-client-${{ needs.meta.outputs.version }}-android-release.apk"
+          else
+            cp build/app/outputs/flutter-apk/app-release.apk "../../artifacts/voice-client-${{ needs.meta.outputs.version }}-android-release-debug-signed.apk"
+          fi
+
+      - name: Remove Android signing material
+        if: always()
+        working-directory: apps/voice-client
+        run: rm -f android/key.properties android/upload-keystore.jks
 
       - name: Upload APKs
         uses: actions/upload-artifact@4b15cb995cd5f0e45f55c6e1e0e94e4a09b9c161 # v4
@@ -255,7 +294,7 @@ jobs:
           flutter-version: "3.44.6"
 
       - name: Cache pub dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
         with:
           path: |
             ~/.pub-cache
@@ -266,7 +305,9 @@ jobs:
 
       - name: Install pub dependencies
         working-directory: apps/voice-client
-        run: flutter pub get
+        run: |
+          flutter config --no-enable-swift-package-manager
+          flutter pub get
 
       - name: Build iOS .app (debug, no codesign)
         working-directory: apps/voice-client
@@ -363,7 +404,8 @@ jobs:
           echo
           echo "### voice-client (Android)"
           echo '```'
-          echo "adb install voice-client-${{ needs.meta.outputs.version }}-android-release-unsigned.apk"
+          echo "adb install voice-client-${{ needs.meta.outputs.version }}-android-release.apk"
+          echo "# Without signing secrets, use the explicitly named *-release-debug-signed.apk asset."
           echo '```'
           echo
           echo "### voice-client (iOS)"

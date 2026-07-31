@@ -149,11 +149,22 @@ task release:check                   # 输出每个 app 的当前版本
 |---|---|
 | `agentd-0.2.0-linux.tgz` / `macos.tgz` / `windows.tgz` | `npm pack` 产物，供 `npm install -g` / `pnpm add -g` 使用 |
 | `openvox-0.2.0-py3-none-any.whl` 与 `openvox-0.2.0.tar.gz` | Python wheel + sdist |
-| `voice-client-0.2.0-android-debug.apk` 与 `...-release-unsigned.apk` | Android（debug + release） |
+| `voice-client-0.2.0-android-debug.apk` 与 `...-release.apk` | Android（debug + 正式签名 release） |
 | `voice-client-0.2.0-ios-simulator.zip` 与 `...-ios-device.zip` | iOS Runner.app 打包 |
 
 > 也可通过 Actions 页面的 "Run workflow" 手工触发并传入自定义 tag（如 `v0.2.0-rc1`）。
 > 推送之前最好先看一眼 [.github/workflows/ci.yml](.github/workflows/ci.yml) 是否全绿。
+
+Android 正式发布使用仓库 Secrets 中的 `ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS` 和 `ANDROID_KEY_PASSWORD`。未配置完整时仍会使用开发密钥构建，但产物会明确命名为 `*-release-debug-signed.apk`，避免被误认为生产签名包。可在本地生成上传密钥：
+
+```bash
+keytool -genkey -v -keystore upload-keystore.jks -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+cp apps/voice-client/android/key.properties.example apps/voice-client/android/key.properties
+# 编辑 key.properties 后，本地运行：
+./tooling/scripts/build-client.sh android
+```
+
+将 keystore 编码后保存为 `ANDROID_KEYSTORE_BASE64`：macOS 使用 `base64 -i upload-keystore.jks | pbcopy`，Linux 使用 `base64 -w 0 upload-keystore.jks`。密钥文件和 `key.properties` 已被 git 忽略，不要提交到仓库。
 
 同时还有 [.github/workflows/ci.yml](.github/workflows/ci.yml) 在每个 PR 上做冒烟构建（typecheck / test / wheel / analyze / APK / iOS .app），用来在合并前发现回归。
 

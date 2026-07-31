@@ -37,7 +37,7 @@ jobs:
           version: 9
 
       - name: Cache pnpm store
-        uses: actions/cache@v4
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
         with:
           path: ~/.local/share/pnpm/store
           key: pnpm-${{ runner.os }}-${{ hashFiles('apps/agentd/pnpm-lock.yaml') }}
@@ -109,7 +109,7 @@ jobs:
           flutter-version: "3.44.6"
 
       - name: Cache pub dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
         with:
           path: |
             ~/.pub-cache
@@ -159,7 +159,7 @@ jobs:
           flutter-version: "3.44.6"
 
       - name: Cache pub dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
         with:
           path: |
             ~/.pub-cache
@@ -170,7 +170,9 @@ jobs:
 
       - name: Install pub dependencies
         working-directory: apps/voice-client
-        run: flutter pub get
+        run: |
+          flutter config --no-enable-swift-package-manager
+          flutter pub get
 
       - name: Build iOS .app (simulator, no codesign)
         working-directory: apps/voice-client
