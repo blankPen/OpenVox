@@ -243,7 +243,9 @@ jobs:
             exit 0
           fi
 
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/upload-keystore.jks
+          # Store the keystore next to app/build.gradle where Gradle's
+          # `file("upload-keystore.jks")` resolves it.
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/upload-keystore.jks
           {
             printf 'storePassword=%s\n' "$ANDROID_KEYSTORE_PASSWORD"
             printf 'keyPassword=%s\n' "$ANDROID_KEY_PASSWORD"
@@ -281,7 +283,7 @@ jobs:
       - name: Remove Android signing material
         if: always()
         working-directory: apps/voice-client
-        run: rm -f android/key.properties android/upload-keystore.jks
+        run: rm -f android/key.properties android/app/upload-keystore.jks
 
       - name: Upload APKs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
