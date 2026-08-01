@@ -101,6 +101,16 @@ export class SessionManager {
     return true;
   }
 
+  /**
+   * Await any pending persistence writes. Useful in tests that need to
+   * tear down the tmp dir immediately after the last mutation; without
+   * this, fire-and-forget writes can race `fs.rm` and surface as
+   * ENOTEMPTY on Linux runners.
+   */
+  async flush(): Promise<void> {
+    await this.saveQueue;
+  }
+
   private persist(): Promise<void> {
     const snapshot = this.map.list();
     const target = this.storePath;

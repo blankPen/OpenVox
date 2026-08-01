@@ -5,11 +5,26 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { spawnSync } from 'node:child_process';
 import {
   discoverProviders,
   readDiscoveryState,
   writeDiscoveryState,
 } from '../src/providers/discovery.js';
+
+/**
+ * Some tests probe the real host for `claude`. CI runners do not have
+ * the binary on PATH, so probe once at module load and gate those tests.
+ */
+function hasClaudeOnPath(): boolean {
+  const pathEnv = process.env['PATH'] ?? '';
+  const probe = spawnSync('which', ['claude'], {
+    env: { ...process.env, PATH: pathEnv },
+    encoding: 'utf8',
+  });
+  return probe.status === 0;
+}
+const claudeAvailable = hasClaudeOnPath();
 
 const TMP = path.join(os.tmpdir(), `agentd-test-${process.pid}`);
 
@@ -22,7 +37,7 @@ afterEach(async () => {
 });
 
 describe('discovery', () => {
-  it('finds `claude` on PATH (machine integration test)', async () => {
+  it.skipIf(!claudeAvailable)('finds `claude` on PATH (machine integration test)', async () => {
     const state = path.join(TMP, 'state.json');
     const providers = await discoverProviders(state);
     const claude = providers.find((p) => p.id === 'claude');

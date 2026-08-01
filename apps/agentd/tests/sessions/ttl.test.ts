@@ -31,6 +31,9 @@ describe('sessions/ttl', () => {
     await sweeper.tick();
     expect(expired).toContain(s.id);
     expect(m.get(s.id)).toBeUndefined();
+    // Wait for fire-and-forget persist() to finish so the afterEach
+    // rm does not race against an open sessions.json on Linux runners.
+    await m.flush();
   });
 
   it('keeps fresh sessions', async () => {
@@ -39,6 +42,7 @@ describe('sessions/ttl', () => {
     const sweeper = new TtlSweeper(m, { ttlSeconds: 3600 });
     await sweeper.tick();
     expect(m.get(s.id)).toBeDefined();
+    await m.flush();
   });
 
   it('start schedules ticks and stop cancels them', () => {

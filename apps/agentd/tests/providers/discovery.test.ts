@@ -2,11 +2,22 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { spawnSync } from 'node:child_process';
 import {
   discoverProviders,
   readDiscoveryState,
   writeDiscoveryState,
 } from '../../src/providers/discovery.js';
+
+/**
+ * Same gating as tests/discovery.test.ts: skip when `claude` is not on
+ * PATH so CI runners without the binary still report green.
+ */
+function hasClaudeOnPath(): boolean {
+  const probe = spawnSync('which', ['claude'], { encoding: 'utf8' });
+  return probe.status === 0;
+}
+const claudeAvailable = hasClaudeOnPath();
 
 let tmpDir: string;
 let statePath: string;
@@ -42,7 +53,7 @@ describe('providers/discovery', () => {
     expect(s.providers).toEqual([]);
   });
 
-  it('discoverProviders returns at least the installed claude binary', async () => {
+  it.skipIf(!claudeAvailable)('discoverProviders returns at least the installed claude binary', async () => {
     const providers = await discoverProviders(statePath);
     expect(providers.map((p) => p.id)).toContain('claude');
     for (const p of providers) {
