@@ -32,6 +32,14 @@ build_android() {
     die "flutter not found in PATH (set FLUTTER_BIN to override)"
   fi
   cd "$REPO_ROOT/apps/voice-client"
+
+  # .env is bundled as a Flutter asset (see pubspec.yaml). On a fresh
+  # checkout the file is gitignored, so materialize it from the committed
+  # .env.example placeholder before invoking flutter pub get.
+  if [[ ! -f .env && -f .env.example ]]; then
+    cp .env.example .env
+    info "Created .env from .env.example (placeholder values; override locally for real secrets)."
+  fi
   run_flutter pub get
   run_flutter build apk --debug
 

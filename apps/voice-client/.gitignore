@@ -13,7 +13,10 @@ build/
 doc/api/
 
 # dotenv environment variables file
-.env*
+.env
+# The placeholder template is committed so CI / fresh checkouts always
+# have something for the flutter_dotenv asset bundle to find.
+!.env.example
 
 # Avoid committing generated Javascript files:
 *.dart.js

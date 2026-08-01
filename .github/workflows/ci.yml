@@ -121,6 +121,20 @@ jobs:
       - name: Install pub dependencies
         working-directory: apps/voice-client
         run: flutter pub get
+      - name: Materialize .env for Flutter assets
+        working-directory: apps/voice-client
+        run: |
+          set -euo pipefail
+          # flutter_dotenv bundles .env as a Flutter asset; if it is missing
+          # on a fresh checkout the bundler fails. Materialize it from the
+          # committed placeholder so CI never blocks on a missing file.
+          if [[ ! -f .env ]]; then
+            cp .env.example .env
+            echo "Created .env from .env.example (placeholder values)."
+          else
+            echo "Using existing .env (real or local override)."
+          fi
+
 
       - name: Run flutter analyze (warnings allowed)
         working-directory: apps/voice-client
@@ -173,6 +187,20 @@ jobs:
         run: |
           flutter config --no-enable-swift-package-manager
           flutter pub get
+      - name: Materialize .env for Flutter assets
+        working-directory: apps/voice-client
+        run: |
+          set -euo pipefail
+          # flutter_dotenv bundles .env as a Flutter asset; if it is missing
+          # on a fresh checkout the bundler fails. Materialize it from the
+          # committed placeholder so CI never blocks on a missing file.
+          if [[ ! -f .env ]]; then
+            cp .env.example .env
+            echo "Created .env from .env.example (placeholder values)."
+          else
+            echo "Using existing .env (real or local override)."
+          fi
+
 
       - name: Build iOS .app (simulator, no codesign)
         working-directory: apps/voice-client
