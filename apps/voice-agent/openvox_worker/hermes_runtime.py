@@ -204,7 +204,7 @@ class HermesRuntime:
         # 1. CLI version probe — fail-soft to cli_error.
         try:
             version_result = self._run([cfg.cli, "--version"], timeout=5.0)
-        except (FileNotFoundError, OSError) as exc:
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as exc:
             return HermesReadiness(
                 status="cli_error",
                 cli_path=cli_path,

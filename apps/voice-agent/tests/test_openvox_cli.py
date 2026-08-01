@@ -32,9 +32,11 @@ def test_init_writes_selected_provider_without_echoing_secret(tmp_path, capsys):
     assert "api_key" not in capsys.readouterr().out
 
 
-def test_status_json_contains_planned_catalog(tmp_path, capsys):
+def test_status_json_contains_planned_catalog(tmp_path, capsys, monkeypatch):
     path = tmp_path / "config.json"
     path.write_text(json.dumps({"llm": {"provider": "hermes"}}))
+    monkeypatch.setattr(openvox_cli, "_build_hermes", lambda cfg: FakeHermes())
+    monkeypatch.setattr(openvox_cli, "_build_agentd", lambda cfg: FakeAgentd())
     assert openvox_cli.main(["status", "--config", str(path), "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     # hermes is the active backend -> other tools still surface planned state.
@@ -90,6 +92,9 @@ class FakeAgentd:
 
     def status(self):
         return {"running": False, "pid": None}
+
+    def loaded_providers(self):
+        return []
 
 
 class FakeWorker:
@@ -197,9 +202,11 @@ def test_init_preserves_existing_config(tmp_path):
     assert "agentd" in data
 
 
-def test_status_reports_selected_provider(tmp_path, capsys):
+def test_status_reports_selected_provider(tmp_path, capsys, monkeypatch):
     path = tmp_path / "config.json"
     path.write_text(json.dumps({"llm": {"provider": "agentd"}}))
+    monkeypatch.setattr(openvox_cli, "_build_hermes", lambda cfg: FakeHermes())
+    monkeypatch.setattr(openvox_cli, "_build_agentd", lambda cfg: FakeAgentd())
     assert openvox_cli.main(["status", "--config", str(path), "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["selected"]["backend"] == "agentd"
@@ -410,6 +417,14 @@ def test_doctor_hermes_dispatch_keeps_legacy_handler(tmp_path, capsys, monkeypat
 # ───────── log ─────────
 
 
+def test_help_lists_logs_without_crashing(capsys):
+    """Building the parser resolves the logs handler for top-level help."""
+    assert openvox_cli.main(["--help"]) == 0
+    output = capsys.readouterr().out
+    assert "logs" in output
+    assert "view or follow runtime logs" in output
+
+
 def test_log_invokes_tail_with_follow_flag(tmp_path, monkeypatch):
     """``openvox log -f`` shells out to ``tail -f <path>``."""
     log_path = tmp_path / "agentd.log"
@@ -458,6 +473,30 @@ def test_log_errors_when_file_missing(tmp_path, capsys, monkeypatch):
     assert rc == 1
     assert "log file not found" in captured.err
     assert "openvox start" in captured.err
+
+
+def test_logs_filters_snapshot_by_time_and_pattern(tmp_path, capsys, monkeypatch):
+    """``logs`` applies the new since and grep filters before writing output."""
+    log_path = tmp_path / "worker.log"
+    log_path.write_text(
+        '{"time":"2026-07-29T23:59:59Z","msg":"old ERROR"}\n'
+        '{"time":"2026-07-30T00:00:00Z","msg":"current ERROR"}\n'
+        '{"time":"2026-07-30T00:00:01Z","msg":"current INFO"}\n'
+    )
+    monkeypatch.setattr(openvox_cli, "_runtime_dir", lambda: tmp_path)
+
+    rc = openvox_cli.main([
+        "logs", "worker",
+        "--since", "2026-07-30T00:00:00Z",
+        "--grep", "ERROR",
+        "--tail", "0",
+    ])
+
+    assert rc == 0
+    output = capsys.readouterr().out
+    assert "current ERROR" in output
+    assert "old ERROR" not in output
+    assert "current INFO" not in output
 
 
 # ───────── LLM connectivity probe (used by start summary) ─────────

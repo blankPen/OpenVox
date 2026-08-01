@@ -8,7 +8,7 @@ touch a real Hermes install during unit testing.
 from __future__ import annotations
 
 from pathlib import Path
-from subprocess import CompletedProcess
+from subprocess import CompletedProcess, TimeoutExpired
 from urllib.parse import urlsplit
 
 import pytest
@@ -192,6 +192,22 @@ def test_inspect_reports_cli_error_on_nonzero_version():
     result = runtime.inspect()
     assert result.status == "cli_error"
     assert result.ready is False
+
+
+def test_inspect_reports_cli_error_when_version_times_out():
+    def slow_version(argv, *, timeout):
+        raise TimeoutExpired(argv, timeout)
+
+    runtime = HermesRuntime(
+        HermesConfig(cli="hermes", api_base="http://127.0.0.1:8642/v1", api_key="k"),
+        which=lambda _: "/bin/hermes",
+        run=slow_version,
+        get=healthy_getter,
+    )
+    result = runtime.inspect()
+    assert result.status == "cli_error"
+    assert result.ready is False
+    assert "timed out" in result.detail
 
 
 def test_inspect_does_not_leak_api_key_in_detail():

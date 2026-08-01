@@ -4,6 +4,9 @@ One entry point to configure and operate the voice-agent stack:
 
 - ``openvox init``          — write / update ``~/.openvox/config.json`` and
                               pick the LLM provider (never echoes secrets).
+- ``openvox logs [target]`` — view / follow runtime logs (``agentd`` /
+  ``worker``) with ``--tail``, ``--since`` and ``--grep`` filters.
+
 - ``openvox start``         — bring up the selected LLM backend (Hermes
                               readiness probe *or* supervised ``agentd``),
                               then launch the LiveKit worker. Any failure
@@ -26,15 +29,18 @@ fakes without touching Node, Hermes, or the network.
 from __future__ import annotations
 
 import argparse
-
-from rich_argparse import RawDescriptionRichHelpFormatter
 import json
 import os
-import subprocess
+import re
 import shutil
+import subprocess
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Sequence
+
+from rich_argparse import RawDescriptionRichHelpFormatter
 
 from .agentd_runtime import AgentdRuntime, AgentdSetupError, _default_http_get
 from .config import Config, ConfigError
@@ -909,6 +915,56 @@ def _run_doctor_checks(cfg: Config) -> list[tuple[str, bool, str]]:
     return checks
 
 
+_DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+_LOG_TIME_RE = re.compile(r'"time"\s*:\s*"([^"]+)"')
+
+
+def _parse_timespec(spec: str) -> float:
+    """Parse '5m' / '1h' / '30s' / '2d' or ISO 8601 into epoch seconds."""
+    spec = (spec or "").strip()
+    if not spec:
+        raise argparse.ArgumentTypeError("time spec must not be empty")
+    unit = spec[-1].lower()
+    if unit in _DURATION_UNITS and spec[:-1].isdigit():
+        return time.time() - int(spec[:-1]) * _DURATION_UNITS[unit]
+    candidate = spec.replace("Z", "+00:00") if spec.endswith("Z") else spec
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"invalid --since value {spec!r}; use e.g. '5m', '1h', '2d', or ISO 8601"
+        ) from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def _parse_tail_count(value: str) -> int:
+    """Parse a non-negative log tail count."""
+    try:
+        count = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("tail count must be an integer") from exc
+    if count < 0:
+        raise argparse.ArgumentTypeError("tail count must be zero or greater")
+    return count
+
+
+def _extract_log_timestamp(line: str) -> float | None:
+    """Return epoch seconds for a pino 'time' field, or None when missing."""
+    match = _LOG_TIME_RE.search(line)
+    if match is None:
+        return None
+    raw = match.group(1).replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
 def _cmd_doctor_all(args, *, out, err) -> int:
     """Run every diagnostic check and print a single report."""
     try:
@@ -944,29 +1000,109 @@ def _cmd_doctor(args, *, out, err) -> int:
     return _cmd_doctor_all(args, out=out, err=err)
 
 
-def _cmd_log(args, *, out, err) -> int:
-    """Tail runtime logs (``agentd`` / ``worker``) with ``-f`` to follow."""
+def _cmd_logs(args, *, out, err) -> int:
+    """View / follow runtime logs with ``--tail`` / ``--since`` / ``--grep``."""
     target = args.target
     log_path = _runtime_dir() / f"{target}.log"
     if not log_path.exists():
         print(f"error: log file not found: {log_path}", file=err)
         print(f"hint: run 'openvox start' first to populate {target}.log", file=err)
         return 1
-    # Delegate to `tail` so the user gets real OS-level follow/buffering
-    # semantics. macOS / Linux both ship tail; on Windows we'd need a
-    # pure-Python fallback, but the voice-agent runtime is POSIX-first.
-    cmd = ["tail"]
+    # --since + --follow are mutually exclusive: a rolling cutoff doesn't make
+    # sense when we're streaming new lines into the terminal.
+    if args.follow and args.since is not None:
+        print("error: --since cannot be combined with --follow", file=err)
+        return 2
+
+    # Compile the grep pattern eagerly so we surface a bad regex to the user
+    # before shelling out to `tail`.
+    pattern = None
+    if args.grep:
+        try:
+            pattern = re.compile(args.grep)
+        except re.error as exc:
+            print(f"error: invalid --grep pattern: {exc}", file=err)
+            return 2
+
+    # Follow mode delegates to `tail -f` (and optionally `grep --line-buffered`)
+    # so we get real OS-level follow/buffering semantics. macOS / Linux both
+    # ship tail; on Windows we'd need a pure-Python fallback, but the
+    # voice-agent runtime is POSIX-first.
     if args.follow:
-        cmd.append("-f")
-    else:
-        cmd += ["-n", str(max(1, args.lines))]
-    cmd.append(str(log_path))
+        cmd = ["tail", "-f", str(log_path)]
+        if pattern is None:
+            try:
+                result = subprocess.run(cmd)
+            except FileNotFoundError:
+                print("error: 'tail' executable not found in PATH", file=err)
+                return 1
+            return result.returncode
+
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except FileNotFoundError:
+            print("error: 'tail' executable not found in PATH", file=err)
+            return 1
+        return_code = 0
+        try:
+            assert process.stdout is not None
+            for line in process.stdout:
+                if pattern.search(line) is not None:
+                    out.write(line)
+                    out.flush()
+            return_code = process.wait()
+        except KeyboardInterrupt:
+            return_code = 130
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                process.wait()
+        return return_code
+
+    if args.since is None and pattern is None and args.tail > 0:
+        cmd = ["tail", "-n", str(args.tail), str(log_path)]
+        try:
+            result = subprocess.run(cmd)
+        except FileNotFoundError:
+            print("error: 'tail' executable not found in PATH", file=err)
+            return 1
+        return result.returncode
+
+    # Snapshot mode: read the whole file, apply --since / --grep filters, then
+    # honour --tail (0 means "all"). Errors=replace keeps a half-written
+    # UTF-8 line from breaking the read on the trailing line.
     try:
-        result = subprocess.run(cmd)
-    except FileNotFoundError:
-        print("error: 'tail' executable not found in PATH", file=err)
+        with log_path.open("r", encoding="utf-8", errors="replace") as fh:
+            lines = fh.readlines()
+    except OSError as exc:
+        print(f"error: cannot read log file {log_path}: {exc}", file=err)
         return 1
-    return result.returncode
+
+    if args.since is not None:
+        cutoff = args.since
+        kept: list[str] = []
+        for line in lines:
+            ts = _extract_log_timestamp(line)
+            # Keep lines with no parseable timestamp; they pre-date the
+            # logger rollover and the user almost always wants to see them.
+            if ts is None or ts >= cutoff:
+                kept.append(line)
+        lines = kept
+
+    if pattern is not None:
+        lines = [line for line in lines if pattern.search(line) is not None]
+
+    if args.tail > 0:
+        lines = lines[-args.tail:]
+
+    out.writelines(lines)
+    return 0
 
 
 def _cmd_hermes_setup(args, *, out, err) -> int:
@@ -1058,7 +1194,7 @@ def build_parser() -> argparse.ArgumentParser:
     status_p.set_defaults(handler=_cmd_status)
 
     log_p = sub.add_parser(
-        "log", help="tail runtime logs",
+        "logs", aliases=["log"], help="view or follow runtime logs",
         formatter_class=RawDescriptionRichHelpFormatter,
     )
     _add_config(log_p)  # accept (and ignore) --config for consistency
@@ -1070,14 +1206,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="which log to show (default: agentd)",
     )
     log_p.add_argument(
-        "-n", "--lines", type=int, default=50,
-        help="lines to show without --follow (default: 50)",
+        "-n", "--tail", "--lines", dest="tail", type=_parse_tail_count, default=50,
+        help="lines to show without --follow; 0 shows all (default: 50)",
     )
     log_p.add_argument(
         "-f", "--follow", action="store_true",
         help="follow log output (like tail -f)",
     )
-    log_p.set_defaults(handler=_cmd_log)
+    log_p.add_argument(
+        "--since", type=_parse_timespec, metavar="TIME",
+        help="show entries since a duration or ISO 8601 time (for example: 5m)",
+    )
+    log_p.add_argument(
+        "--grep", metavar="REGEX",
+        help="show entries matching a regular expression",
+    )
+    log_p.set_defaults(handler=_cmd_logs)
 
     doctor_p = sub.add_parser(
         "doctor", help="diagnostics",
