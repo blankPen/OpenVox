@@ -113,8 +113,11 @@ jobs:
       - name: Pack agentd tarball
         working-directory: apps/agentd
         # npm pack outputs "agentd-0.1.0.tgz" — capture into a stable name.
+        # `mkdir -p` first; each matrix runner has its own checkout and the
+        # artifacts/ directory only exists once some other job created it.
         run: |
           set -euo pipefail
+          mkdir -p ../../artifacts
           name="$(npm pack 2>/dev/null | tail -1)"
           mv "$name" "../../artifacts/agentd-${{ needs.meta.outputs.version }}-${{ matrix.os == 'windows-latest' && 'windows' || matrix.os == 'macos-latest' && 'macos' || 'linux' }}.tgz"
         shell: bash
@@ -150,12 +153,15 @@ jobs:
 
       - name: Build openvox wheel + sdist
         working-directory: apps/voice-agent
+        # Default Windows shell is pwsh, which doesn't understand bash
+        # strict mode — pin shell: bash so the same script runs on every OS.
         run: |
           set -euo pipefail
           python -m build
           mkdir -p ../../artifacts
           mv dist/openvox-*.whl  ../../artifacts/
           mv dist/openvox-*.tar.gz ../../artifacts/
+        shell: bash
 
       - name: Upload openvox artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
