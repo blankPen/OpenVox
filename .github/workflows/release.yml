@@ -347,10 +347,10 @@ jobs:
 
       - name: Build iOS .app (debug, no codesign)
         working-directory: apps/voice-client
-        # --no-codesign produces the iphoneos slice without provisioning.
-        # --simulator additionally produces the simulator slice so CI can
-        # run on either architecture.
-        run: flutter build ios --debug --no-codesign --simulator
+        # `--no-codesign` without `--simulator` makes Flutter build BOTH
+        # the iphoneos (device) and iphonesimulator slices, which we then
+        # zip separately in the next step.
+        run: flutter build ios --debug --no-codesign
         env:
           # The local scripts may reference $HOME/.pub-cache for patrol.
           PUB_CACHE: ${{ github.workspace }}/.pub-cache
@@ -467,6 +467,8 @@ jobs:
           echo
           echo "### voice-client (iOS)"
           echo '```'
+          echo "# Device slice (iPhone/iPad, no codesign):"
           echo "unzip voice-client-${{ needs.meta.outputs.version }}-ios-device.zip   # → Runner.app"
-          echo "# sideload with ios-deploy / Xcode / AltStore"
-          echo '```'
+          echo "# Simulator slice (x86_64 + arm64):"
+          echo "unzip voice-client-${{ needs.meta.outputs.version }}-ios-simulator.zip   # → Runner.app (drag into Simulator)"
+          echo "# sideload the device slice with ios-deploy / Xcode / AltStore"
