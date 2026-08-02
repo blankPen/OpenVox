@@ -399,22 +399,30 @@ jobs:
           ls -lhR artifacts
 
       - name: Publish release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          tag_name: ${{ needs.meta.outputs.tag }}
-          name: OpenVox ${{ needs.meta.outputs.tag }}
-          draft: false
-          prerelease: ${{ needs.meta.outputs.is_prerelease == 'true' }}
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-          files: |
-            artifacts/**/*.tgz
-            artifacts/**/*.whl
-            artifacts/**/*.tar.gz
-            artifacts/**/*.apk
-            artifacts/**/*.zip
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # softprops/action-gh-release@v2 was observed to corrupt binary
+          # uploads (the wheel landed on the release page with a missing
+          # __init__.py and a wrong-CRC cli.py even though the artifact
+          # zip was fine). Use gh CLI directly — it streams each asset
+          # via the assets API and doesn't munge bytes.
+          VERSION: ${{ needs.meta.outputs.version }}
+          TAG: ${{ needs.meta.outputs.tag }}
+          PRERELEASE_FLAG: ${{ needs.meta.outputs.is_prerelease == 'true' && '--prerelease' || '' }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          asset_args=()
+          for f in artifacts/**/*.tgz artifacts/**/*.whl artifacts/**/*.tar.gz artifacts/**/*.apk artifacts/**/*.zip; do
+            asset_args+=("$f")
+          done
+          if [[ ${#asset_args[@]} -eq 0 ]]; then
+            echo "::error::No artifacts to publish"
+            exit 1
+          fi
+          gh release create "$TAG"             --repo "$GITHUB_REPOSITORY"             --title "OpenVox $TAG"             --generate-notes             $PRERELEASE_FLAG             "${asset_args[@]}"
+          echo
+          echo "Release published: https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
 
       - name: Print install instructions
         if: success()
