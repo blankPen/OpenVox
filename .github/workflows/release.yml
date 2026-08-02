@@ -411,11 +411,24 @@ jobs:
           PRERELEASE_FLAG: ${{ needs.meta.outputs.is_prerelease == 'true' && '--prerelease' || '' }}
         run: |
           set -euo pipefail
-          shopt -s nullglob
+          # download-artifact with merge-multiple puts each artifact at the
+          # top level of artifacts/, so `artifacts/*` is enough. Use globstar
+          # too so any future nested layout still works.
+          shopt -s nullglob globstar
           asset_args=()
-          for f in artifacts/**/*.tgz artifacts/**/*.whl artifacts/**/*.tar.gz artifacts/**/*.apk artifacts/**/*.zip; do
+          for f in artifacts/*.{tgz,whl,tar.gz,apk,zip} artifacts/**/*.tgz artifacts/**/*.whl artifacts/**/*.tar.gz artifacts/**/*.apk artifacts/**/*.zip; do
             asset_args+=("$f")
           done
+          # de-dupe while preserving order
+          declare -A seen=()
+          unique_args=()
+          for f in "${asset_args[@]}"; do
+            if [[ -z "${seen[$f]:-}" ]]; then
+              unique_args+=("$f")
+              seen[$f]=1
+            fi
+          done
+          asset_args=("${unique_args[@]}")
           if [[ ${#asset_args[@]} -eq 0 ]]; then
             echo "::error::No artifacts to publish"
             exit 1
