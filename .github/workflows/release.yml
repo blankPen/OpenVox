@@ -345,14 +345,21 @@ jobs:
           fi
 
 
-      - name: Build iOS .app (debug, no codesign)
+      - name: Build iOS device slice (debug, no codesign)
         working-directory: apps/voice-client
-        # `--no-codesign` without `--simulator` makes Flutter build BOTH
-        # the iphoneos (device) and iphonesimulator slices, which we then
-        # zip separately in the next step.
+        # `--no-codesign` skips provisioning; produces the iphoneos (device) slice.
         run: flutter build ios --debug --no-codesign
         env:
           # The local scripts may reference $HOME/.pub-cache for patrol.
+          PUB_CACHE: ${{ github.workspace }}/.pub-cache
+
+      - name: Build iOS simulator slice (debug, no codesign)
+        working-directory: apps/voice-client
+        # `--simulator` produces the iphonesimulator slice separately. Flutter
+        # doesn't emit both slices in a single debug-mode build, so we run it
+        # twice. The second invocation reuses the pods from the first.
+        run: flutter build ios --debug --no-codesign --simulator
+        env:
           PUB_CACHE: ${{ github.workspace }}/.pub-cache
 
       - name: Stage iOS artifacts
