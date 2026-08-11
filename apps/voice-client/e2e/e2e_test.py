@@ -81,7 +81,7 @@ def make_token(identity: str, name: str) -> str:
             "roomRecord": True,
         },
         "roomConfig": {
-            "agents": [{"agentName": "openz"}],
+            "agents": [{"agentName": "openvox"}],
         },
     }
     return jwt.encode(payload, API_SECRET, algorithm="HS256")

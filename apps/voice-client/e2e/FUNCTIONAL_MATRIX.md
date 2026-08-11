@@ -10,7 +10,7 @@
 | Bundle ID | `com.livekit.example.VoiceAssistant-flutter` |
 | LiveKit URL | `wss://livekit.openz.top:7443` |
 | 房间 | `openz-room-{ts}-{rand}`（每次启动唯一） |
-| Agent 名称 | `openz` |
+| Agent 名称 | `openvox` |
 | 后端 worker | `openvox-agent`（Volcengine STT） |
 | 屏幕像素 | 1206×2622 (iPhone 17, @3x = 402×874 pt) |
 | 状态栏 | 顶部约 100 pt |

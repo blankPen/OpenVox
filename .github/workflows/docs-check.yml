@@ -1,0 +1,41 @@
+name: docs-check
+
+# Verify internal links in OpenVox markdown docs on every PR that touches
+# docs or the link-check script. Keeps README / INSTALLATION / USAGE /
+# CONTRIBUTING / ARCHITECTURE / CHANGELOG and per-area README files
+# from drifting (broken anchors, missing files).
+#
+# Tool: tooling/scripts/check-doc-links.sh (bash + perl; perl ships with
+# every GitHub Actions ubuntu runner by default — no setup step needed).
+#
+# Companion: ci.yml (builds) and release.yml (tag → GitHub Release).
+# Triggered only on docs / tooling changes so it does not run on pure
+# code edits. Run manually with `workflow_dispatch` if needed.
+
+on:
+  pull_request:
+    paths:
+      - "**/*.md"
+      - "tooling/scripts/**"
+      - ".github/workflows/docs-check.yml"
+  push:
+    branches: [main]
+    paths:
+      - "**/*.md"
+      - "tooling/scripts/**"
+      - ".github/workflows/docs-check.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: docs-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs-check:
+    name: docs (internal link check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Verify internal links
+        run: bash tooling/scripts/check-doc-links.sh --strict

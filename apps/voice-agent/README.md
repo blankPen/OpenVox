@@ -67,7 +67,7 @@ openvox stop
 派单测试：
 
 ```bash
-lk dispatch create --dev --room demo --agent-name openz
+lk dispatch create --dev --room demo --agent-name openvox
 lk room join demo --identity alice --dev --publish hello.ogg --auto-subscribe --exit-after-publish
 ```
 

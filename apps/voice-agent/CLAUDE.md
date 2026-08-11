@@ -48,7 +48,7 @@ apps/agentd/                            # ACP 桥接 daemon（TypeScript + Fasti
 | 开发模式 | `python -m openvox_worker status` |
 | 跑单测 | `./scripts/run_tests.sh unit` |
 | 跑 e2e | `./scripts/run_tests.sh e2e` |
-| 把 agent 派到房间 | `lk dispatch create --dev --room demo --agent-name openz` |
+| 把 agent 派到房间 | `lk dispatch create --dev --room demo --agent-name openvox` |
 
 `agent_name` 保持 **`openz`**：远端 LiveKit 派单表按此注册，详见 `shared/room-naming.md`。
 
@@ -71,7 +71,7 @@ apps/agentd/                            # ACP 桥接 daemon（TypeScript + Fasti
 - **`prewarm_fnc` 必须是模块级函数**，签名 `def _prewarm(proc)`。不能 lambda。
 - **editable install + `--no-deps`** — vendored 插件钉 `livekit-agents==1.5.4`，不加 `--no-deps` 把宿主降级拆了 extras。
 - **8081 端口** — worker IPC 端口。`scripts/start.sh` 不再自动 `lsof -ti:8081 | xargs kill -9`（v2 改的），端口冲突时手动清。
-- **agent_name = `openz`** — 不可改，远端派单表按 `openz` 注册。
+- **agent_name = `openvox`**（v0.3.0+；v0.2.x 是 `openz`）—— LiveKit 派单表按 `openvox` 注册。**v0.2.x 升级**：老 config `~/.openvox/config.json` 的 `livekit.agent_name` 需手动改为 `openvox`（或重跑 `openvox init`），否则 dispatch 失败。
 - **Hermes 要求至少一条 user 消息** — `VolcengineAgent.on_enter` 通过 `generate_reply(user_input="打招呼")` 注入占位。
 - **STT AppID 需开通「流式语音识别 大模型」** — 否则 STT WebSocket 403。
 - **CLI start 会对 hermes 做 `hermes --version` 探测** — 如果 `hermes` 在本机 PATH 但不可用（挂起），`openvox status` 可能超时。这是 v2 的已知限制。

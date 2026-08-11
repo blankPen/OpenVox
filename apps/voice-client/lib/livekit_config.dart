@@ -25,7 +25,7 @@ const roomName = String.fromEnvironment(
 );
 
 /// Agent name registered by the worker.
-const agentName = 'openz';
+const agentName = 'openvox';
 
 /// DEV-ONLY: HS256 signing key for the self-hosted LiveKit server.
 const liveKitApiKey = 'openz';

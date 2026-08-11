@@ -42,6 +42,15 @@ android/key.properties
 .openvox-backup-*/
 .claude-task-brief.md
 
+# LoopX control-plane state (local-only; see openwiki/quickstart.md or
+# loopx/README.md → "Boundary Note"). LoopX state contains local run
+# context, scratch evidence, and machine-private paths and must not be
+# committed on a public repo. Use `loopx doctor` to verify install;
+# reinstall with the no-clone installer (`curl -fsSL
+# https://huangruiteng.github.io/loopx/install.sh | bash`).
+.loopx/
+.codex/goals/
+
 # Tooling tmp
 *.log
 

@@ -1,14 +1,42 @@
 # OpenVox
 
-> 实时语音 Agent 平台。客户端 (Flutter) + 后端 (Python LiveKit Worker)，通过 LiveKit Server 实时双向音频。
+> 实时语音 Agent 平台。Flutter 客户端 + Python LiveKit Worker，可切换 LLM 后端（Hermes / agentd），对接火山引擎 STT/TTS。
+
+**状态**：骨架已就绪，可走「[快速上手](#快速上手)」跑通。
 
 ---
 
-## 项目命名
+## 30 秒电梯版
 
-- 项目名：**OpenVox**
-- 核心词：**Vox** = voice / 声音
-- 旧名：**openvox**（仅在新仓库尚未建立时短暂使用过，本次重构直接沿用 OpenVox 作为正式名）
+OpenVox 让你 **5 分钟内在本机跑通一个中文语音助手**：
+
+```bash
+git clone <repo-url> openvox && cd openvox
+
+# 装环境（macOS / Linux；Windows 用 scripts/install.ps1）
+./scripts/install.sh
+
+# 初始化并启动
+openvox init                   # 写 ~/.openvox/config.json（选 hermes 或 agentd 后端）
+openvox start --yes            # 拉起所选后端 + LiveKit worker
+
+# 另开终端：起 Flutter 客户端
+cd apps/voice-client && flutter run
+```
+
+跑通后看 → **[USAGE.md](./USAGE.md)** 拿命令细节、典型工作流、故障排查。
+
+---
+
+## 我要看哪里？
+
+| 你是… | 打开 |
+|---|---|
+| 第一次接触，先装环境 | **[INSTALLATION.md](./INSTALLATION.md)** |
+| 装好了，要命令 / 跑通 demo / 排查故障 | **[USAGE.md](./USAGE.md)** |
+| 准备改代码 / 提 PR | **[CONTRIBUTING.md](./CONTRIBUTING.md)** |
+| 想理解系统是怎么搭起来的 | **[ARCHITECTURE.md](./ARCHITECTURE.md)** |
+| 找具体运行时细节 / 已知坑 / 配置字段 | **[openwiki/](./openwiki/)**（由 CI 每日刷新，禁止手改） |
 
 ---
 
@@ -34,16 +62,20 @@
                                               └────────────────┘
 ```
 
-- **apps/voice-agent/**：Python LiveKit worker，把音频流水线接起来
-- **apps/voice-client/**：Flutter 客户端，用户界面
-- **shared/**：两端都要遵守的契约（room 命名 / agent 协议 / token 字段）
-- **infra/**：LiveKit Server 的本地部署
-- **tooling/**：跨端编排脚本（Taskfile、dev-up / dev-down、build / install CLI）
-- **apps/agentd/**：本地 ACP → OpenAI REST 转换守护进程，供 voice-agent 选择的 LLM 后端使用
+- **apps/voice-agent/**：Python LiveKit worker，导出 `openvox` CLI；STT → LLM → TTS pipeline
+- **apps/voice-client/**：Flutter 客户端（iOS/Android/Web/Mac）
+- **apps/agentd/**：可选 LLM 后端（Node + Fastify），把 ACP 兼容 CLI（Claude Code / Codex / OpenClaw）桥成 OpenAI REST；导出 `agentd` CLI
+- **infra/**：LiveKit Server 的本地 Docker 部署
+- **shared/**：跨端契约（room 命名 / agent 协议 / token claims / env 清单）—— **改这里必须两个 app 都有人 review**
+- **tooling/**：Taskfile + shell 脚本（dev / build / install）
+- **scripts/**：顶层一键脚本（`install.sh` / `install.ps1`）—— 用户入口
+- **openwiki/**：CI 自动维护的 wiki（运行时细节 / 配置字段 / 已知坑）
 
 ---
 
 ## 快速上手
+
+> 三终端是为了让每端日志独立可看。一键起整套：见 `tooling/scripts/dev-up.sh`（或 `task dev:up`）。
 
 ```bash
 # 1. 起 LiveKit Server（如果你没有现成的）
@@ -59,7 +91,42 @@ cd apps/voice-client
 flutter run
 ```
 
-> 三终端是为了让每端日志独立可看。一键起整套：见 `tooling/scripts/dev-up.sh`。
+更详细的命令、典型工作流、故障排查见 [USAGE.md](./USAGE.md)。
+
+---
+
+## 项目命名
+
+- 项目名：**OpenVox**
+- 核心词：**Vox** = voice / 声音
+- 旧名：`openvox`（仅在新仓库尚未建立时短暂使用过；本次重构直接沿用 OpenVox 作为正式名）
+
+---
+
+## 目录
+
+```
+openvox/
+├── apps/
+│   ├── agentd/           # Node ACP → OpenAI REST 守护进程（agentd CLI）
+│   ├── voice-agent/      # Python LiveKit worker（openvox CLI）
+│   └── voice-client/     # Flutter 客户端
+├── shared/               # 跨端契约（markdown + JSON example）
+├── infra/                # LiveKit Server 本地部署
+├── tooling/
+│   ├── Taskfile.yaml     # 主编排（dev / build / install / release:check）
+│   └── scripts/          # build-cli / install-cli / build-client / dev-up / dev-down
+├── scripts/              # 顶层一键脚本：install.sh + install.ps1
+├── .github/workflows/    # ci.yml（PR 冒烟）+ release.yml（tag → GitHub Release）
+├── openwiki/             # CI 自动维护的 wiki（禁止手改）
+└── README.md / INSTALLATION.md / USAGE.md / CONTRIBUTING.md / ARCHITECTURE.md
+```
+
+---
+
+## 跨端契约
+
+涉及两端都要看的"协议 / 命名 / 字段"，统一放在 [shared/](./shared/)。改这些文件**必须两个 app 都有人 review**。
 
 ---
 
@@ -168,35 +235,11 @@ cp apps/voice-client/android/key.properties.example apps/voice-client/android/ke
 
 同时还有 [.github/workflows/ci.yml](.github/workflows/ci.yml) 在每个 PR 上做冒烟构建（typecheck / test / wheel / analyze / APK / iOS .app），用来在合并前发现回归。
 
-
----
-
-## 跨端契约
-
-涉及两端都要看的"协议 / 命名 / 字段"，统一放在 [shared/](./shared/)。改这些文件**必须两个 app 都有人 review**。
-
----
-
-## 目录
-
-```
-openvox/
-├── apps/
-│   ├── agentd/           # Node ACP → OpenAI REST 守护进程（agentd CLI）
-│   ├── voice-agent/      # Python LiveKit worker（openvox CLI）
-│   └── voice-client/     # Flutter 客户端
-├── shared/               # 跨端契约（markdown + JSON example）
-├── infra/                # LiveKit Server 本地部署
-├── tooling/
-│   ├── Taskfile.yaml     # 主编排（dev / build / install / release:check）
-│   └── scripts/          # build-cli / install-cli / build-client
-├── .github/workflows/    # ci.yml（PR 冒烟）+ release.yml（tag → GitHub Release）
-├── .gitignore
-└── README.md (本文件)
-```
-
 ---
 
 ## 状态
 
-骨架已就绪。`apps/voice-agent` 与 `apps/voice-client` 已迁入代码，可走「快速上手」跑通。后续 backlog 详见 [`openwiki/quickstart.md`](openwiki/quickstart.md) → Backlog。
+骨架已就绪。`apps/voice-agent` 与 `apps/voice-client` 已迁入代码，可走「[快速上手](#快速上手)」跑通。
+
+- 已知坑速查：[openwiki/quickstart.md § 已知坑索引](./openwiki/quickstart.md) 与 [`apps/voice-agent/CLAUDE.md` § 已知坑](./apps/voice-agent/CLAUDE.md)
+- backlog / 延期项：[openwiki/quickstart.md § Backlog](./openwiki/quickstart.md)

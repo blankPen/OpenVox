@@ -114,6 +114,35 @@ tasks:
       - bash -c 'set -e; for app in agentd openvox voice-client; do printf "%-13s %s\n" "$app" "$(bash {{.TOOLING}}/lib/versions.sh; app_version $app)"; done'
 
   lint:
-    desc: Lint all (TODO 实施阶段再细化)
+    desc: Lint all (agentd typecheck + voice-client flutter analyze; voice-agent uses pytest as structural lint — see CONTRIBUTING.md § 7)
     cmds:
-      - echo "TODO: agent ruff + client flutter analyze"
+      - bash -c 'set -e; cd {{.ROOT_DIR}}/apps/agentd && pnpm typecheck'
+      - bash -c 'set -e; cd {{.ROOT_DIR}}/apps/voice-client && flutter analyze --no-fatal-warnings --no-fatal-infos'
+      - echo "voice-agent: structural lint via pytest tests/test_*.py (see CONTRIBUTING.md § 7)"
+
+  lint:agentd:
+    desc: Lint agentd only (tsc --noEmit via pnpm)
+    dir: apps/agentd
+    cmds:
+      - pnpm typecheck
+
+  lint:client:
+    desc: Lint voice-client only (flutter analyze)
+    dir: apps/voice-client
+    cmds:
+      - flutter analyze --no-fatal-warnings --no-fatal-infos
+
+  docs:check:
+    desc: Verify internal links in OpenVox markdown docs (default roots)
+    cmds:
+      - "{{.TOOLING}}/check-doc-links.sh --strict"
+
+  docs:check:strict:
+    desc: Verify internal links + also report missing target files
+    cmds:
+      - "{{.TOOLING}}/check-doc-links.sh --strict"
+
+  docs:check:quiet:
+    desc: Verify internal links, only print summary
+    cmds:
+      - "{{.TOOLING}}/check-doc-links.sh --strict --quiet"

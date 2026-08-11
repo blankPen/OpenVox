@@ -193,11 +193,11 @@ def test_start_rejects_unknown_provider():
 def test_init_preserves_existing_config(tmp_path):
     path = tmp_path / "config.json"
     path.write_text(
-        json.dumps({"livekit": {"agent_name": "openz"}, "llm": {"provider": "hermes"}})
+        json.dumps({"livekit": {"agent_name": "openvox"}, "llm": {"provider": "hermes"}})
     )
     openvox_cli.main(["init", "--config", str(path), "--provider", "agentd"])
     data = json.loads(path.read_text())
-    assert data["livekit"]["agent_name"] == "openz"
+    assert data["livekit"]["agent_name"] == "openvox"
     assert data["llm"]["provider"] == "agentd"
     assert "agentd" in data
 
@@ -344,7 +344,7 @@ def test_doctor_all_reports_missing_volcengine(tmp_path, capsys, monkeypatch):
         "llm": {"provider": "agentd"},
         "livekit": {
             "url": "wss://livekit.example.com",
-            "api_key": "k", "api_secret": "s", "agent_name": "openz",
+            "api_key": "k", "api_secret": "s", "agent_name": "openvox",
         },
         "agentd": {
             "host": "127.0.0.1", "port": 8787,
@@ -373,7 +373,7 @@ def test_doctor_all_passes_when_everything_configured(tmp_path, capsys, monkeypa
         "llm": {"provider": "agentd"},
         "livekit": {
             "url": "wss://livekit.example.com",
-            "api_key": "k", "api_secret": "s", "agent_name": "openz",
+            "api_key": "k", "api_secret": "s", "agent_name": "openvox",
         },
         "agentd": {
             "host": "127.0.0.1", "port": 8787,

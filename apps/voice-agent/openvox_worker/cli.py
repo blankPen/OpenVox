@@ -261,7 +261,7 @@ def init_config(
 
     # Seed LiveKit connection defaults; prompt in interactive mode.
     livekit_sec = data.setdefault("livekit", {})
-    livekit_sec.setdefault("agent_name", "openz")  # internal, not prompted
+    livekit_sec.setdefault("agent_name", "openvox")  # internal, not prompted
     if interactive:
         for lk_key, lk_label, lk_default in (
             ("url", "LiveKit server URL", "wss://livekit.openz.top"),
