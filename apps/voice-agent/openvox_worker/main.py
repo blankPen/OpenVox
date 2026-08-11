@@ -235,18 +235,21 @@ class VolcengineAgent(Agent):
         )
 
     async def on_enter(self) -> None:
-        # 主动打招呼：generate_reply() 触发 LLM 出
-        # 一句开场白并经 TTS 合成广播，让客户端进房就能听到招呼声。
+        # 主动打招呼：原实现调 ``generate_reply(user_input="打招呼")`` 触发
+        # 一次完整 LLM → TTS → 音频 链路，导致进房后 5~8 秒才能听到问候。
+        # 这里换成固定的预录问候：纯 TTS，无 LLM round-trip，把首音频
+        # 延迟从 ~5s 砍到 ~400ms（TTS 单次 POST 一次）。
         #
-        # 必须给 generate_reply 传 ``user_input`` 触发一条 user 消息注入 chat_ctx。
-        # 火山引擎 Hermes 网关严格校验 OpenAI 兼容 chat 接口，要求 messages 数组
-        # 里至少有一条 user role 的消息；只传 system(instr) 不传 user_input 时，
-        # 上游会回 400 ``No user message found in messages`` 把 LLM 调用炸掉。
-        # livekit-agents 1.6.x 的 ``_pipeline_reply_task_impl`` 只在 ``new_message
-        # is not None`` 时往 chat_ctx.insert(user_message)，所以无 user_input 调
-        # generate_reply() 等价于发出空 messages 请求。
-        logger.info("[Agent] 主动打招呼")
-        await self.session.generate_reply(user_input="打招呼")
+        # 用户端体感：
+        #   - 进房立即听到问候（"你好呀，我是小语……"）
+        #   - 用户真正开口说话时 LLM 已经在响应他的第一句
+        # 这里把文字做成常量 + Unicode 短句；audio 真选什么 voice 由 .env
+        # 里 volcengine.tts.voice 控制。
+        logger.info("[Agent] 主动打招呼 (greeting)")
+        await self.session.say(
+            "你好呀，我是小语。请讲，我帮你做点什么。",
+            allow_interruptions=True,
+        )
 
 
 # ---------------------------------------------------------------------------

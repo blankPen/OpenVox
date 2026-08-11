@@ -65,16 +65,27 @@ export async function chatRoute(
     }
 
     // Session resolution: prefer explicit session_id, then room_id, then new.
+    // The room_id branch is race-safe — two concurrent first turns of the
+    // same room share a single session via the byRoomOrCreate promise cache.
     let session = body.session_id ? deps.sessions.get(body.session_id) : undefined;
     if (!session && body.room_id && !body.new_session) {
       session = deps.sessions.byRoom(body.room_id);
     }
     if (!session) {
-      session = deps.sessions.create({
-        provider: entry.provider.id,
-        roomId: body.room_id,
-        meta: { model: body.model },
-      });
+      if (body.room_id && !body.new_session) {
+        // Race-safe create on (provider, roomId).
+        session = await deps.sessions.byRoomOrCreate(
+          entry.provider.id,
+          body.room_id,
+          { model: body.model },
+        );
+      } else {
+        session = deps.sessions.create({
+          provider: entry.provider.id,
+          roomId: body.room_id,
+          meta: { model: body.model },
+        });
+      }
     }
     deps.sessions.touch(session.id);
 
@@ -87,14 +98,30 @@ export async function chatRoute(
     }
 
     try {
+      // Hot-path optimization: extract only the latest user turn before
+      // forwarding. For long-lived providers (claude stream-json) the CLI
+      // owns conversation history, so re-sending the full message array
+      // here would burn tokens on every turn. HTTP forwarders can still
+      // consult `body.messages` directly if they need full context.
+      const lastUser = [...body.messages].reverse().find((m) => m.role === 'user');
+      const prompt = (lastUser?.content ?? '').toString();
+
+      // Map body.messages into the provider's narrower role union (the
+      // OpenAI ChatBodySchema accepts 'tool' but SendMessageInput only
+      // takes system|user|assistant; we coerce tool→user here so the
+      // shape is consistent across providers).
+      const normalizedMessages = body.messages.map((m) => ({
+        role: (m.role === 'tool' ? 'user' : m.role) as 'system' | 'user' | 'assistant',
+        content: m.content,
+      }));
+
       const result = await entry.provider.send({
-        messages: body.messages.map((m) => ({
-          role: m.role === 'tool' ? 'user' : (m.role as 'system' | 'user' | 'assistant'),
-          content: m.content,
-        })),
+        prompt,
+        messages: normalizedMessages,
         resumeCliSessionId: session.cliSessionId,
         model: body.model,
         signal: deps.sessions.signal(session.id),
+        sessionId: session.id,
       });
 
       // The events() async generator can only be iterated once.

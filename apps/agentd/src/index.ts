@@ -30,6 +30,7 @@ async function main() {
     const handle = await startDaemon(args.configPath);
     // Print status, then exit.
     handle.sweeper.stop();
+    await drainLongLived(handle);
     await handle.server.close();
     return;
   }
@@ -39,6 +40,7 @@ async function main() {
     logger.info({ signal }, 'shutting down');
     try {
       handle.sweeper.stop();
+      await drainLongLived(handle);
       await handle.server.close();
       process.exit(0);
     } catch (err) {
@@ -48,6 +50,20 @@ async function main() {
   };
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
+}
+
+async function drainLongLived(handle: {
+  longLivedProviders: Array<{ id: string; shutdown: () => Promise<void> }>;
+}): Promise<void> {
+  await Promise.all(
+    handle.longLivedProviders.map(async (p) => {
+      try {
+        await p.shutdown();
+      } catch (err) {
+        logger.warn({ err, id: p.id }, 'long-lived provider shutdown failed');
+      }
+    }),
+  );
 }
 
 main().catch((err) => {

@@ -322,7 +322,12 @@ class SpeechStream(stt.SpeechStream):
                     raise APIStatusError(message="connection closed unexpectedly")
 
                 try:
-                    self._process_stream_event(msg.data)
+                    # parse_response + json.loads + gzip.decompress can be
+                    # a few ms on multi-KB STT frames; running on the event
+                    # loop would block the WS recv_task. Yield to a thread
+                    # so the loop keeps spinning for the next audio chunk.
+                    parsed = await asyncio.to_thread(parse_response, msg.data)
+                    self._process_stream_event(parsed)
                 except Exception:
                     logger.exception("failed to process message")
 
@@ -368,7 +373,14 @@ class SpeechStream(stt.SpeechStream):
         return ws
 
     def _process_stream_event(self, data: dict) -> None:
-        results = parse_response(res=data)["payload_msg"]
+        # Accept either raw bytes (legacy path) or a pre-parsed dict
+        # (the asyncio.to_thread path used by the recv loop). Both routes
+        # yield the same `payload_msg` shape downstream.
+        results = (
+            data["payload_msg"]
+            if isinstance(data, dict) and "payload_msg" in data
+            else parse_response(res=data)["payload_msg"]
+        )
         result = results.get("result", None)
         if result is None:
             return

@@ -56,6 +56,19 @@ export class SessionManager {
     return rec;
   }
 
+  /**
+   * Race-safe create: when two requests for the same `roomId` race, the
+   * second caller awaits the first's outcome and gets the same record
+   * rather than racing `roomToAgentd.set()` and orphaning the loser.
+   */
+  async byRoomOrCreate(
+    provider: string,
+    roomId: string,
+    meta?: Record<string, unknown>,
+  ): Promise<SessionRecord> {
+    return this.map.byRoomOrCreate(roomId, () => this.create({ provider, roomId, meta }));
+  }
+
   touch(id: string): void {
     const rec = this.map.get(id);
     if (!rec) return;

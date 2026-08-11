@@ -26,6 +26,17 @@ export class IdMap {
   private byId = new Map<string, SessionRecord>();
   private roomToAgentd = new Map<string, string>(); // last agentd per room
   private byCli = new Map<string, string>(); // cli_session_id → agentd_session_id
+  /**
+   * Per-room serialization for session-create. Prevents the race that
+   * crashed retries from a flaky mobile client: when two requests for the
+   * same `room_id` arrive simultaneously without `session_id`, both
+   * `byRoom(roomId)` reads returned undefined, both `create()`'d two
+   * distinct agentd sessions, and the second write won the roomToAgentd
+   * mapping while the loser's in-flight stream had no future caller able
+   * to address it.  Now create() chains through this map: the second
+   * caller awaits the first's promise and reuses the same record.
+   */
+  private roomCreateInFlight = new Map<string, Promise<SessionRecord>>();
 
   upsert(rec: SessionRecord): void {
     this.byId.set(rec.id, rec);
@@ -50,6 +61,32 @@ export class IdMap {
 
   list(): SessionRecord[] {
     return Array.from(this.byId.values());
+  }
+
+  /**
+   * Serialized per-room creator. Returns the existing session for a room
+   * when one is already mapped; otherwise creates a new record, ensuring
+   * only one create runs at a time per room.
+   */
+  async byRoomOrCreate(
+    roomId: string,
+    factory: () => SessionRecord,
+  ): Promise<SessionRecord> {
+    const existing = this.byRoom(roomId);
+    if (existing) return existing;
+    const inFlight = this.roomCreateInFlight.get(roomId);
+    if (inFlight) return inFlight;
+    const promise = (async () => {
+      try {
+        const rec = factory();
+        this.upsert(rec);
+        return rec;
+      } finally {
+        this.roomCreateInFlight.delete(roomId);
+      }
+    })();
+    this.roomCreateInFlight.set(roomId, promise);
+    return promise;
   }
 
   delete(id: string): boolean {

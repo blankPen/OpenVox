@@ -18,6 +18,16 @@ export interface DaemonHandle {
   registry: ProviderRegistry;
   sessions: SessionManager;
   sweeper: TtlSweeper;
+  /**
+   * Provider instances that own long-lived children — drained at shutdown.
+   * Currently only ClaudeProvider (claude CLI subprocess pool).
+   */
+  longLivedProviders: BaseProviderWithShutdown[];
+}
+
+interface BaseProviderWithShutdown {
+  readonly id: string;
+  shutdown(): Promise<void>;
 }
 
 export async function startDaemon(configPath?: string): Promise<DaemonHandle> {
@@ -35,6 +45,40 @@ export async function startDaemon(configPath?: string): Promise<DaemonHandle> {
   const { added, skipped } = registry.load(discovered);
   logger.info({ added, skipped, totalProviders: registry.list().length }, 'providers loaded');
 
+  // Initialise long-lived providers with runtime knobs.
+  const longLivedProviders: BaseProviderWithShutdown[] = [];
+  for (const entry of registry.list()) {
+    const providerAny = entry.provider as unknown as {
+      shutdown?: () => Promise<void>;
+      init?: (cfg: unknown) => Promise<void>;
+      prewarm?: () => Promise<void>;
+    };
+    if (typeof providerAny.shutdown === 'function' && typeof providerAny.init === 'function') {
+      try {
+        await providerAny.init({
+          maxPoolSize: cfg.maxConcurrentPerProvider,
+          idleTtlMs: cfg.sessionTtlSeconds * 1000,
+        });
+        longLivedProviders.push({
+          id: entry.provider.id,
+          shutdown: providerAny.shutdown.bind(entry.provider),
+        });
+        // Best-effort prewarm: spawn one idle child up front so the first
+        // real conversation in a fresh daemon doesn't pay cold-start tax.
+        // Failures here are logged but never block server start.
+        if (typeof providerAny.prewarm === 'function') {
+          try {
+            await providerAny.prewarm();
+          } catch (err) {
+            logger.warn({ err, id: entry.provider.id }, 'provider prewarm failed');
+          }
+        }
+      } catch (err) {
+        logger.warn({ err, id: entry.provider.id }, 'long-lived provider init failed');
+      }
+    }
+  }
+
   const server = await buildServer({ cfg, registry, sessions });
 
   const sweeper = new TtlSweeper(sessions, { ttlSeconds: cfg.sessionTtlSeconds });
@@ -43,5 +87,5 @@ export async function startDaemon(configPath?: string): Promise<DaemonHandle> {
   await server.listen({ port: cfg.port, host: cfg.host });
   logger.info({ host: cfg.host, port: cfg.port }, 'agentd listening');
 
-  return { server, cfg, registry, sessions, sweeper };
+  return { server, cfg, registry, sessions, sweeper, longLivedProviders };
 }

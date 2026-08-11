@@ -13,3 +13,4 @@ build-stdout.log
 .vscode/
 .idea/
 .DS_Store
+apps/agentd/pnpm-workspace.yaml
