@@ -11,6 +11,28 @@ OpenVox 所有面向用户可见的变更记录。格式遵循 [Keep a Changelog
 
 ---
 
+## [v0.3.2] - 2026-08-11
+
+### Fixed
+
+**iOS Podfile.lock 强制重新生成（v0.3.1 仍失败的真因）**
+
+- v0.3.1 加的 `pod install --repo-update` 没解决问题——committed `Podfile.lock` 与 `flutter pub get` 解析出的当前 `flutter_webrtc` 约束不兼容。`pod install` 在 lock 与开发 pod 约束冲突时直接 fail，不主动 update。
+- v0.3.2 改 release.yml iOS job：先 `flutter pub get` 解析 plugin deps，再 `rm Podfile.lock && pod install --repo-update` 强制从空 lock + 当前 Podfile 重建。
+- 注意：本机（macOS + Flutter 3.x）`pod install --repo-update` 一致（不改变 lock）；CI runner 解析的 `flutter_webrtc` 版本可能因 cache / 网络状态不同而漂移。强制重建 lock 让 CI 在任何状态下都生成自洽的 lock。
+
+### 3-app 版本 patch bump
+
+- `openvox` (voice-agent)：0.3.1 → 0.3.2
+- `agentd`：0.2.1 → 0.2.2
+- `voice-client`：1.0.0+16 → 1.0.0+17
+
+### 用户影响
+
+无。
+
+---
+
 ## [v0.3.1] - 2026-08-11
 
 ### Fixed
