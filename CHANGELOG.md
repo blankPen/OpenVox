@@ -11,9 +11,24 @@ OpenVox 所有面向用户可见的变更记录。格式遵循 [Keep a Changelog
 
 ---
 
-## [Unreleased]
+## [v0.3.1] - 2026-08-11
 
-_暂无。_
+### Fixed
+
+**Release CI 修复（v0.3.0 tag 已推送但 release job 跳过的根因）**
+
+- **`apps/agentd/pnpm-workspace.yaml`** —— 删除。该文件内容是 `allowBuilds: set this to true or false`（字面占位符），pnpm v9+ 校验失败：`ERROR  packages field missing or empty`。agentd 是单 package，不需要 workspace 元数据；`allowBuilds` 若真要配置应放 `package.json#pnpm.allowBuilds`。
+- **`voice-client/ios` 构建** —— release.yml iOS job 加 `pod install --repo-update` 步骤。`Podfile.lock` 中 `WebRTC-SDK` 版本可能与 Flutter 解析的 `flutter_webrtc` 新版本不一致（v0.3.0 release run 报 `flutter_webrtc (1.6.0) requires WebRTC-SDK (= 144.7559.09)` 与 lock 中 `137.7151.04` 冲突）。`--repo-update` 在 build 前刷新 lock。
+
+### 3-app 版本 patch bump
+
+- `openvox` (voice-agent)：0.3.0 → 0.3.1
+- `agentd`：0.2.0 → 0.2.1
+- `voice-client`：1.0.0+15 → 1.0.0+16
+
+### 用户影响
+
+无。v0.3.0 → v0.3.1 是 release-only fix，不影响 API / config / 行为。如果之前没装上 v0.3.0 artifact（因为 release job 跳过），这次应该能正常装上。
 
 ---
 

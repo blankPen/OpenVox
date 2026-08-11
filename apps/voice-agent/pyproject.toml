@@ -1,6 +1,6 @@
 [project]
 name = "openvox"
-version = "0.3.0"
+version = "0.3.1"
 description = "OpenVox voice-agent runtime: Volcengine STT/TTS + selectable LLM backend (Hermes / agentd) via LiveKit Agents"
 requires-python = ">=3.10"
 dependencies = [
