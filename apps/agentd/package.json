@@ -1,6 +1,6 @@
 {
   "name": "agentd",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Local self-hosted agent daemon bridging ACP-compatible coding CLIs to an OpenAI-compatible REST + ACP API",
   "type": "module",
   "bin": {

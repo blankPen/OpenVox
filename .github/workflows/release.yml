@@ -331,15 +331,20 @@ jobs:
           flutter config --no-enable-swift-package-manager
           flutter pub get
 
-      - name: Refresh CocoaPods repo + lock (v0.3.1+)
+      - name: Refresh CocoaPods lock against current flutter_webrtc (v0.3.1+)
         working-directory: apps/voice-client
         run: |
-          # flutter_webrtc's required WebRTC-SDK version drifts over time
-          # and the committed Podfile.lock can fall behind. Run
-          # `pod install --repo-update` to refresh the lock against the
-          # current pubspec deps before the actual iOS build. Cheap if
-          # already cached (~5s); full repo fetch on cold cache (~30s).
-          cd ios && pod install --repo-update
+          # The committed Podfile.lock can fall behind the flutter_webrtc
+          # plugin's current WebRTC-SDK constraint (which drifts as
+          # pub.dev resolves transitive deps). Force-regenerate the
+          # lock from scratch so `pod install` can satisfy both:
+          #   flutter pub get resolves the plugin deps into
+          #     .flutter-plugins-dependencies, which feeds the Podfile.
+          #   rm Podfile.lock + pod install regenerates the lock from
+          #     the fresh Podfile without conflicting constraints.
+          set -euo pipefail
+          flutter pub get
+          (cd ios && rm -f Podfile.lock && pod install --repo-update)
       - name: Materialize .env for Flutter assets
         working-directory: apps/voice-client
         run: |
