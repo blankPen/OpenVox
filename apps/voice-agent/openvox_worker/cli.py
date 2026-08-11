@@ -232,8 +232,8 @@ def init_config(
                     idx = 0
                 provider = candidates[idx][0]
         else:
-            entered = input_fn("LLM provider [hermes]: ").strip()
-            provider = entered or "hermes"
+            entered = input_fn("LLM provider [claude]: ").strip()
+            provider = entered or "claude"
 
     original_provider = provider
     # Resolve CLI-style names (claude → agentd, etc.)
@@ -521,7 +521,7 @@ def orchestrate_start(
     this call owns (only ``agentd`` is owned; the external Hermes gateway is
     never stopped) before re-raising.
     """
-    provider = cfg.get("llm.provider", "hermes")
+    provider = cfg.get("llm.provider", "claude")
     backend = _resolve_backend(provider)
     if provider in PLANNED_PROVIDERS:
         raise PlannedProviderError(
@@ -570,7 +570,7 @@ def collect_status(cfg: Config, *, hermes: Any, agentd: Any) -> dict:
     models for the agentd bridge. ``tools`` is the catalogue of other
     user-facing tools, filtered so the active one is not repeated.
     """
-    selected_backend = cfg.get("llm.provider", "hermes")
+    selected_backend = _resolve_backend(cfg.get("llm.provider", "claude"))
     user_tool = _user_facing_tool(cfg)
     livekit = {
         "url": str(cfg.get("livekit.url", "")),
@@ -635,7 +635,7 @@ def _user_facing_tool(cfg: Config) -> str:
     The ``agentd/`` prefix on the model is the canonical way to declare
     which underlying tool the bridge is serving.
     """
-    provider = cfg.get("llm.provider", "hermes")
+    provider = cfg.get("llm.provider", "claude")
     if provider == "hermes":
         return "hermes"
     if provider == "agentd":
@@ -876,7 +876,7 @@ def _run_doctor_checks(cfg: Config) -> list[tuple[str, bool, str]]:
             ))
 
     # ── Backend (selected provider) ──
-    provider = cfg.get("llm.provider", "hermes")
+    provider = cfg.get("llm.provider", "claude")
     if provider == "agentd":
         agentd_rt = _build_agentd(cfg)
         agentd_state = agentd_rt.status()

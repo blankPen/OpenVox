@@ -32,6 +32,13 @@ class _AgentScreenState extends State<AgentScreen> {
 
   int _stateIdx = 0;
 
+  /// Tracks whether the worker has actually joined, published audio and
+  /// produced *any* response. Until that flips false, we show a splash
+  /// ("Agent 正在加载…") so users no longer see a static "正在聆听"
+  /// screen for 5+ seconds while the LLM warms up. This is purely UX —
+  /// no behavioural change.
+  bool _agentReady = false;
+
   static const _states = [
     _OrbStateInfo('正在聆听', '说话即开始,沉默即结束', VoxOrbState.listening),
     _OrbStateInfo('正在思考', 'Vox 正在处理你的问题', VoxOrbState.thinking),
@@ -46,6 +53,36 @@ class _AgentScreenState extends State<AgentScreen> {
   void initState() {
     super.initState();
     _scheduleAdvance();
+    // Hook the LiveKit room: any remote audio track (i.e., the agent's
+    // mic) being subscribed == the worker is alive. Flip the splash off
+    // at that moment.
+    final ctrl = context.read<AppCtrl>();
+    ctrl.room.addListener(_onRoomChanged);
+  }
+
+  @override
+  void dispose() {
+    try {
+      context.read<AppCtrl>().room.removeListener(_onRoomChanged);
+    } catch (_) {
+      // Provider may be torn down before dispose runs.
+    }
+    super.dispose();
+  }
+
+  void _onRoomChanged() {
+    final room = context.read<AppCtrl>().room;
+    // `remoteParticipants` is a map that flips when remote tracks join.
+    // We use it as the "agent is alive" signal — cheap and race-free.
+    final hasRemoteAudio = room.remoteParticipants.values.any(
+      (p) => p.trackPublications.values.any(
+        (pub) => pub.kind == sdk.TrackType.AUDIO,
+      ),
+    );
+    if (hasRemoteAudio && !_agentReady) {
+      if (!mounted) return;
+      setState(() => _agentReady = true);
+    }
   }
 
   void _scheduleAdvance() {
@@ -86,6 +123,17 @@ class _AgentScreenState extends State<AgentScreen> {
                       child: _ChatPanel(
                         onSend: (text) => context.read<AppCtrl>().sendMessage(),
                       ),
+                    ),
+                  ),
+                  // UX splash: visible until agent actually publishes audio.
+                  // Fade-out is generous (480ms) so it doesn't blink when
+                  // audio arrives ~1s after entering the room.
+                  AnimatedOpacity(
+                    duration: const Duration(milliseconds: 480),
+                    opacity: _agentReady ? 0.0 : 1.0,
+                    child: IgnorePointer(
+                      ignoring: _agentReady,
+                      child: const _ConnectingSplash(),
                     ),
                   ),
                 ],
@@ -968,6 +1016,92 @@ class _HangupBtnState extends State<_HangupBtn> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Splash overlay shown on the Agent screen until the worker has actually
+/// joined the room and published its audio track.
+///
+/// Why this exists: between pressing "connect" on the welcome screen and
+/// the agent's first reply, the user previously saw a static "正在聆听"
+/// orb for 5+ seconds.  This overlay makes it clear we're still
+/// connecting — the same affordance mobile-app users expect from any
+/// voice/chat boot.  Auto-fades when ``_agentReady`` flips true.
+class _ConnectingSplash extends StatefulWidget {
+  const _ConnectingSplash();
+
+  @override
+  State<_ConnectingSplash> createState() => _ConnectingSplashState();
+}
+
+class _ConnectingSplashState extends State<_ConnectingSplash>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _spinCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _spinCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1400),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _spinCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final dim = isDark
+        ? Colors.black.withValues(alpha: 0.32)
+        : Colors.white.withValues(alpha: 0.42);
+    final ring = isDark
+        ? VoxColors.darkAccent
+        : VoxColors.lightAccent;
+    final titleColor = isDark ? VoxColors.darkFg : VoxColors.lightFg;
+    final subColor = isDark ? VoxColors.darkFg3 : VoxColors.lightFg3;
+
+    return SizedBox.expand(
+      child: DecoratedBox(
+        decoration: BoxDecoration(color: dim),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 56,
+                height: 56,
+                child: RotationTransition(
+                  turns: _spinCtrl,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 3.5,
+                    valueColor: AlwaysStoppedAnimation<Color>(ring),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
+              Text(
+                'Vox 正在唤醒…',
+                style: VoxFonts.display(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: titleColor,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '首次连接通常需要数秒',
+                style: VoxFonts.body(fontSize: 12, color: subColor),
+              ),
+            ],
+          ),
         ),
       ),
     );

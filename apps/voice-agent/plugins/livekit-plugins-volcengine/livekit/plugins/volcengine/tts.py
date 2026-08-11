@@ -170,7 +170,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             sample_rate=self._opts.sample_rate,
             num_channels=1,
             mime_type="audio/pcm",
-            frame_size_ms=200,
+            # Lowered from 200ms → 80ms so decoded audio chunks reach the
+            # LiveKit client (and the user's ears) sooner after the TTS
+            # server returns them. 80ms keeps a healthy jitter-buffer margin
+            # for slow networks; bump to 120ms if you see underruns.
+            frame_size_ms=80,
             stream=True,
         )
 

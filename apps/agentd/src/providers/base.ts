@@ -14,14 +14,36 @@ import type { CustomProvider } from '../config/schema.js';
  * (idle TTL, restart policy) and is unaware of protocols.
  */
 export interface SendMessageInput {
-  /** OpenAI-style messages. Last user message is the prompt; prior is context. */
-  messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
+  /**
+   * Optional whole-conversation history in OpenAI format. Some providers
+   * (HTTP-style OpenAI forwarders) need the full message list. Long-lived
+   * child-pool providers (claude stream-json) ignore it because the CLI
+   * maintains its own per-session history and only needs the latest user
+   * turn — they read ``prompt`` instead.
+   */
+  messages?: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
+  /**
+   * Most recent user turn. For long-lived providers (claude stream-json)
+   * this is the ONLY field on the wire — the rest of the conversation
+   * lives in the CLI's internal session state, so re-sending it would
+   * just waste tokens.
+   */
+  prompt?: string;
   /** CLI session id from a prior call — set means "resume". */
   resumeCliSessionId?: string;
   /** model id like `agentd/claude` — purely informational, unused by stream-json. */
   model?: string;
   /** Abort signal — provider should kill subprocess on abort. */
   signal?: AbortSignal;
+  /**
+   * agentd session id (UUID). Used by providers that pool long-lived
+   * child processes (e.g. ``claude --print --input-format stream-json``)
+   * to find a warm child by agentd session rather than CLI session.
+   *
+   * Optional because not every provider needs it: HTTP providers ignore it,
+   * oneshot-spawn providers also ignore it.
+   */
+  sessionId?: string;
 }
 
 export type ProviderEvent =
